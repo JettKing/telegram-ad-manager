@@ -1,12 +1,16 @@
 # DEVELOPMENT_LOG
 
+## 2026-11-17 — 阶段 5 多媒体素材与相册聚合
+
+实现 `apps/api/src/media.ts`，Webhook 支持 text、photo、video、animation/GIF、document 和 channel_post。素材保存 Telegram file_id、file_unique_id、文件名、MIME、大小、尺寸、时长、caption、source_chat_id 和 telegram_message_id。
+
+新增 `0007_media_ingestion.sql`，使用来源消息唯一索引保证 Webhook 重复投递不会创建重复素材。相册按 media_group_id 聚合，显式经历 collecting、settling、pending_confirmation、completed；完成后的迟到消息重新打开 collecting 并递增版本。素材和相册幂等键均检查 Tenant/Workspace，防止跨租户覆盖。
+
+新增媒体列表和相册状态推进 API，并将 media:read/media:write 加入后端 RBAC。阶段门禁通过 7 份 Migration、18 个测试、类型、Lint 和生产构建。真实 Telegram/D1/R2/Cron 仍未联调。
+
 ## 2026-11-17 — 阶段 4 频道绑定与 Telegram 权限检查
 
-核对 Telegram 官方 Bot API 后，实现 `getMe`、`getChat`、`getChatMember` client。频道绑定要求 `Chat.type === "channel"`，根据 Bot creator/administrator/member 状态和 `can_post_messages`、`can_edit_messages`、`can_delete_messages` 生成权限快照。
-
-实现 `D1ChannelRepository` 与四个受保护接口：频道列表、绑定、复核、软解绑。查询均使用当前 session 的 tenant_id/workspace_id；跨工作空间重复绑定拒绝。权限不足会保存 `permission_error`，不返回可发布成功。
-
-阶段 4 门禁首轮已通过 4 个测试文件、13 个测试，类型和构建也通过；补充 `0006_channel_binding.sql` 后将再次运行最终门禁。真实 Bot API 与 Cloudflare D1 仍未联调。
+实现频道身份、管理员权限快照、绑定、复核和软解绑。
 
 ## 2026-11-17 — 阶段 3 用户、平台会话与 RBAC
 

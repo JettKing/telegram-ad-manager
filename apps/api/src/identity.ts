@@ -15,6 +15,8 @@ export type Permission =
   | "finance:write"
   | "publish:read"
   | "publish:write"
+  | "media:read"
+  | "media:write"
   | "settings:write";
 
 export interface IdentityContext {
@@ -59,19 +61,19 @@ interface WorkspaceRow {
 const rolePermissions: Record<Role, ReadonlySet<Permission>> = {
   owner: new Set([
     "workspace:read", "workspace:manage", "channel:read", "channel:manage", "customer:read", "customer:write",
-    "order:read", "order:write", "finance:read", "finance:write", "publish:read", "publish:write", "settings:write",
+    "order:read", "order:write", "finance:read", "finance:write", "publish:read", "publish:write", "media:read", "media:write", "settings:write",
   ]),
   admin: new Set([
     "workspace:read", "workspace:manage", "channel:read", "channel:manage", "customer:read", "customer:write",
-    "order:read", "order:write", "finance:read", "finance:write", "publish:read", "publish:write", "settings:write",
+    "order:read", "order:write", "finance:read", "finance:write", "publish:read", "publish:write", "media:read", "media:write", "settings:write",
   ]),
   manager: new Set([
     "workspace:read", "channel:read", "channel:manage", "customer:read", "customer:write", "order:read", "order:write",
-    "publish:read", "publish:write",
+    "publish:read", "publish:write", "media:read", "media:write",
   ]),
-  editor: new Set(["workspace:read", "channel:read", "customer:read", "customer:write", "order:read", "order:write", "publish:read", "publish:write"]),
-  finance: new Set(["workspace:read", "channel:read", "customer:read", "order:read", "finance:read", "finance:write"]),
-  viewer: new Set(["workspace:read", "channel:read", "customer:read", "order:read", "publish:read"]),
+  editor: new Set(["workspace:read", "channel:read", "customer:read", "customer:write", "order:read", "order:write", "publish:read", "publish:write", "media:read", "media:write"]),
+  finance: new Set(["workspace:read", "channel:read", "customer:read", "order:read", "finance:read", "finance:write", "media:read"]),
+  viewer: new Set(["workspace:read", "channel:read", "customer:read", "order:read", "publish:read", "media:read"]),
 };
 
 export function hasPermission(role: Role, permission: Permission): boolean {

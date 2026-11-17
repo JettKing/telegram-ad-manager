@@ -5,6 +5,7 @@ import { D1ReplayStore, D1WebhookUpdateStore, MemoryWebhookUpdateStore, parseTel
 import { telegramServiceState } from "@tg-ad-manager/telegram";
 import { hasPermission, issuePlatformSession, provisionTelegramIdentity, readPlatformSession, revokePlatformSession, type IdentityContext, type Permission } from "./identity.js";
 import { ChannelCheckError, D1ChannelRepository, TelegramBotApiClient, verifyTelegramChannel } from "./channels.js";
+import { D1MediaRepository } from "./media.js";
 
 export interface ApiBindings {
   DB?: D1Like;
@@ -109,7 +110,7 @@ app.get("/health/ready", (context) => {
 });
 
 app.get("/api/v1/health", (context) => context.json(success(healthPayload(runtimeEnv(context.env)), requestId(context))));
-app.get("/api/v1/metadata", (context) => context.json(success({ name: "TG Ad Manager", version, stage: "channel-binding-permissions", externalIntegrations: { telegram: telegramServiceState(runtimeEnv(context.env).TELEGRAM_BOT_TOKEN), cloudflareD1: runtimeEnv(context.env).DB ? "binding_present" : "not_configured" } }, requestId(context))));
+app.get("/api/v1/metadata", (context) => context.json(success({ name: "TG Ad Manager", version, stage: "media-ingestion-album-aggregation", externalIntegrations: { telegram: telegramServiceState(runtimeEnv(context.env).TELEGRAM_BOT_TOKEN), cloudflareD1: runtimeEnv(context.env).DB ? "binding_present" : "not_configured" } }, requestId(context))));
 
 app.post("/api/v1/auth/telegram", async (context) => {
   const env = runtimeEnv(context.env);
@@ -230,6 +231,44 @@ app.post("/api/v1/channels/:channelId/unbind", requireAuth("channel:manage"), as
   return context.json(success({ unbound: true, channelId: context.req.param("channelId") }, requestId(context)));
 });
 
+app.get("/api/v1/media-assets", requireAuth("media:read"), async (context) => {
+  const env = runtimeEnv(context.env);
+  const auth = context.get("auth");
+  if (!env.DB || !auth) return context.json(failure("MEDIA_NOT_CONFIGURED", "素材数据库上下文尚未配置", requestId(context)), 503);
+  const assets = await new D1MediaRepository(env.DB).listAssets(auth.tenantId, auth.workspaceId);
+  return context.json(success({ assets }, requestId(context)));
+});
+
+app.post("/api/v1/media-groups/:groupId/settle", requireAuth("media:write"), async (context) => {
+  const env = runtimeEnv(context.env);
+  const auth = context.get("auth");
+  if (!env.DB || !auth) return context.json(failure("MEDIA_GROUP_NOT_CONFIGURED", "相册数据库上下文尚未配置", requestId(context)), 503);
+  const groupId = context.req.param("groupId");
+  const settling = await new D1MediaRepository(env.DB).startSettlement(groupId, auth.tenantId, auth.workspaceId);
+  if (!settling) return context.json(failure("MEDIA_GROUP_NOT_FOUND_OR_NOT_COLLECTING", "相册不存在、已隔离或不在 collecting 状态", requestId(context)), 404);
+  return context.json(success({ groupId, state: "settling" }, requestId(context)));
+});
+
+app.post("/api/v1/media-groups/:groupId/pending-confirmation", requireAuth("media:write"), async (context) => {
+  const env = runtimeEnv(context.env);
+  const auth = context.get("auth");
+  if (!env.DB || !auth) return context.json(failure("MEDIA_GROUP_NOT_CONFIGURED", "相册数据库上下文尚未配置", requestId(context)), 503);
+  const groupId = context.req.param("groupId");
+  const pending = await new D1MediaRepository(env.DB).markPendingConfirmation(groupId, auth.tenantId, auth.workspaceId);
+  if (!pending) return context.json(failure("MEDIA_GROUP_NOT_SETTLING", "相册不存在或尚未进入 settling", requestId(context)), 409);
+  return context.json(success({ groupId, state: "pending_confirmation" }, requestId(context)));
+});
+
+app.post("/api/v1/media-groups/:groupId/confirm", requireAuth("media:write"), async (context) => {
+  const env = runtimeEnv(context.env);
+  const auth = context.get("auth");
+  if (!env.DB || !auth) return context.json(failure("MEDIA_GROUP_NOT_CONFIGURED", "相册数据库上下文尚未配置", requestId(context)), 503);
+  const groupId = context.req.param("groupId");
+  const completed = await new D1MediaRepository(env.DB).confirmGroup(groupId, auth.tenantId, auth.workspaceId, new Date().toISOString());
+  if (!completed) return context.json(failure("MEDIA_GROUP_NOT_PENDING_CONFIRMATION", "相册不存在或尚未进入 pending_confirmation", requestId(context)), 409);
+  return context.json(success({ groupId, state: "completed" }, requestId(context)));
+});
+
 app.post("/webhooks/telegram", async (context) => {
   const env = runtimeEnv(context.env);
   const expectedSecret = env.TELEGRAM_WEBHOOK_SECRET;
@@ -248,7 +287,10 @@ app.post("/webhooks/telegram", async (context) => {
   try {
     const store = env.DB && env.TELEGRAM_BOT_IDENTITY_ID ? new D1WebhookUpdateStore(env.DB, env.TELEGRAM_BOT_IDENTITY_ID) : developmentWebhookStore;
     const result = await store.claim(update, JSON.stringify(body), new Date().toISOString());
-    return context.json(success({ received: true, accepted: result.accepted, duplicate: result.duplicate, updateId: update.update_id }, requestId(context)));
+    const media = env.DB && env.TELEGRAM_BOT_IDENTITY_ID
+      ? await new D1MediaRepository(env.DB).ingest(env.TELEGRAM_BOT_IDENTITY_ID, body)
+      : { handled: false, reason: "scope_not_found" as const };
+    return context.json(success({ received: true, accepted: result.accepted, duplicate: result.duplicate, updateId: update.update_id, media }, requestId(context)));
   } catch (error) {
     console.error("telegram_webhook_persistence_error", { updateId: update.update_id, message: error instanceof Error ? error.message : "unknown" });
     return context.json(failure("WEBHOOK_PERSISTENCE_FAILED", "Webhook 暂时无法持久化", requestId(context)), 503);

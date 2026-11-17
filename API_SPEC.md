@@ -15,20 +15,22 @@
 | POST | `/api/v1/auth/telegram` | 验证 initData、upsert 用户、创建默认租户/工作空间并签发 session | 已实现 |
 | GET | `/api/v1/auth/me` | 验证 Bearer Session 并返回当前身份上下文 | 已实现 |
 | POST | `/api/v1/auth/logout` | 撤销当前数据库会话 | 已实现 |
-| GET | `/api/v1/workspace/context` | `workspace:read` 权限保护的租户/工作空间上下文 | 已实现 |
-| GET | `/api/v1/finance/access` | `finance:read` 权限保护的访问边界 | 已实现 |
 | GET | `/api/v1/channels` | 当前 Tenant/Workspace 的频道列表 | 已实现 |
-| POST | `/api/v1/channels/bind` | 校验 getChat/getMe/getChatMember 并保存频道权限快照 | 已实现 |
+| POST | `/api/v1/channels/bind` | 校验频道并保存权限快照 | 已实现 |
 | POST | `/api/v1/channels/:channelId/recheck` | 重新读取 Telegram 身份与权限 | 已实现 |
 | POST | `/api/v1/channels/:channelId/unbind` | 当前 Tenant/Workspace 下软解绑频道 | 已实现 |
-| POST | `/webhooks/telegram` | 验证 Webhook Secret、解析 Update、去重并持久化 | 已实现 |
+| GET | `/api/v1/media-assets` | 当前 Tenant/Workspace 的最近媒体素材 | 已实现 |
+| POST | `/api/v1/media-groups/:groupId/settle` | `collecting → settling`，锁定相册收集窗口 | 已实现 |
+| POST | `/api/v1/media-groups/:groupId/pending-confirmation` | `settling → pending_confirmation` | 已实现 |
+| POST | `/api/v1/media-groups/:groupId/confirm` | `pending_confirmation → completed` | 已实现 |
+| POST | `/webhooks/telegram` | 验证 Webhook Secret、去重并解析媒体 Update | 已实现 |
 
-## 频道绑定
+## 媒体接收
 
-`POST /api/v1/channels/bind` 需要 `channel:manage`，接收 `{ "chatId": "@channel_username 或 chat_id" }`。服务端调用 Telegram `getChat`，要求 `type === "channel"`，随后调用 `getMe` 和 `getChatMember`。发布权限来自 `can_post_messages`，删除权限来自 `can_delete_messages`，频道编辑/置顶相关能力来自 `can_edit_messages`。缺少发布权限会保存记录但返回 422 和 `CHANNEL_PERMISSION_ERROR`。
+Webhook 支持 `message`、`channel_post`、编辑消息中的 text、photo、video、animation 和 document。图片选择 Telegram `photo[]` 的最大 PhotoSize；媒体写入 `media_assets`，保存 Bot identity、来源 chat、来源 message、文件标识和用户可见元数据。没有可识别媒体的 Update 会返回 `unsupported_update`，不制造空素材。
 
-频道查询、复核和解绑都加入 session 的 tenant_id/workspace_id 条件。频道绑定使用 bot_identity_id + telegram_chat_id 识别重复绑定，跨工作空间绑定返回冲突。
+相册通过 `media_group_id` 写入 `media_groups` 和 `media_group_items`。来源 `bot_identity_id + source_chat_id + telegram_message_id` 是素材幂等键；相册 `bot_identity_id + telegram_media_group_id` 是聚合键。重复 Webhook 会更新同一素材并忽略重复的 group item。若相同键解析到不同 Tenant/Workspace，服务拒绝覆盖。
 
 ## 尚未开放的接口边界
 
-租户邀请/切换、成员角色变更、频道操作审计、CRM、套餐、订单、素材、排期、发布任务、订阅、统计和管理员接口仍按阶段清单逐步实现。
+媒体下载到 R2、缩略图、病毒扫描、OCR、音频、客户 CRM、套餐、订单、排期、发布任务、订阅、统计和管理员接口仍按阶段清单逐步实现。
