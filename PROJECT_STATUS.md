@@ -2,30 +2,35 @@
 
 ## 当前状态
 
-阶段 7 已完成付款凭证、Finance 审核和退款流水的代码基线，并通过本地门禁。付款凭证不伪造本地文件上传，而是引用既有 Telegram 媒体素材；真实文件下载、R2 存储和上传通道保留给后续基础设施阶段。
+阶段 8 已完成排期、发布任务队列、Telegram 发布适配和到期处理的代码基线，并通过本地门禁。当前实现使用 D1 任务表作为队列存储，由 Workers scheduled handler 周期 claim 到期任务；没有声称已经配置 Cloudflare Queues 或真实 Cron。
 
 ## 已实现
 
-`apps/api/src/payments.ts` 提供付款和退款输入校验、D1 查询、金额累计、审核状态更新和订单状态同步。提交付款凭证前校验订单仍处于待付款/待审核状态、凭证素材属于当前 Tenant/Workspace 且为 ready、付款金额为正整数且不超过未核销应收。
+`apps/api/src/publishing.ts` 提供排期输入校验、D1 排期仓储、任务幂等 claim、任务 payload 装载、成功/失败日志、指数退避和到期任务查询。只有 approved 订单可以创建排期；排期会写 `ad_schedules`、`ad_publish_tasks`，任务 idempotency key 为 `schedule:<scheduleId>`。
 
-Finance 可读取待审核付款和退款队列。付款审核会保存审核人、审核时间、备注、付款状态和 `paid_at`；当 approved 付款累计达到订单应收时，订单同步为 `payment_status = paid`，可迁移的订单同步为 `status = paid`。拒绝会保留拒绝记录和备注，不删除凭证。
+`TelegramBotApiClient` 新增 sendMessage、sendPhoto、sendVideo、sendDocument、deleteMessage、pinChatMessage 和 unpinChatMessage。`TelegramPublisher` 根据订单内容和素材类型发布 Telegram 消息，保存最后一个成功 message_id；429 使用 Telegram `retry_after`，网络或服务错误使用指数退避，永久 API 错误不会无限重试。
 
-退款使用独立的 `ad_order_refunds` 流水表。申请时要求正金额和理由；可退款金额等于订单应收减去已批准退款，拒绝超额。Finance 批准后按累计批准退款同步 `refunded` 或 `partially_refunded`，每次申请和审核都写入订单修订记录。
+任务成功后订单进入 published，失败达到 max_attempts 后进入 failed 或 uncertain。到期处理查询已发布且 `planned_end_at <= now` 的订单，调用 Telegram deleteMessage；删除成功后订单进入 completed，并写发布日志。
+
+Workers 入口新增 scheduled handler，调用 `processDuePublishTasks`，单次最多处理 10 个到期队列任务并处理到期删除。
 
 ## API
 
-付款：`GET /api/v1/finance/payments/pending`、`GET/POST /api/v1/orders/:orderId/payments`、`POST /api/v1/finance/payments/:paymentId/review`。退款：`GET /api/v1/finance/refunds/pending`、`GET/POST /api/v1/orders/:orderId/refunds`、`POST /api/v1/finance/refunds/:refundId/review`。
+- `GET /api/v1/schedules`：读取当前工作空间排期。
+- `GET /api/v1/publish-tasks`：读取当前工作空间发布任务。
+- `POST /api/v1/orders/:orderId/schedules`：创建排期并入队。
 
-付款提交使用 `order:write`；付款/退款审核和待审核队列使用 `finance:read`/`finance:write`。所有查询通过订单 Tenant/Workspace 条件隔离。
+排期读取使用 `publish:read`，排期创建使用 `publish:write`。所有业务查询按 Tenant/Workspace 过滤。
 
 ## 检查证据
 
-- `pnpm db:check`：通过，9 份 Migration 连续有效。
+- `pnpm db:check`：通过，10 份 Migration 连续有效。
 - `pnpm typecheck`：通过。
 - `pnpm lint`：通过。
-- `pnpm test`：阶段测试补充后共 26 个测试。
+- `pnpm test`：通过，8 个测试文件、30 个测试。
 - `pnpm build`：通过。
+- 开发 API metadata 阶段为 `scheduling-publish-expiration`。
 
 ## 尚未完成
 
-尚未执行真实 Cloudflare D1 Migration、事务并发、R2 文件上传、支付渠道回调、生产财务对账和财务审计流水。当前实现是内部付款凭证和退款审核状态机，不代表已接入真实支付网关。
+尚未执行真实 Cloudflare D1 Migration、Workers Cron、Queues、Telegram Bot 发布和 deleteMessage 外部联调。当前 claim 采用 D1 条件更新，真实并发、任务恢复和非幂等 Telegram 请求需要生产验证。多消息发布、pin/edit/delete 策略和媒体组原子发布仍需后续增强。

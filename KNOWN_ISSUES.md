@@ -1,10 +1,10 @@
 # KNOWN_ISSUES
 
-1. 目前没有 Telegram Bot Token、Webhook Secret、频道管理员权限和公开 HTTPS Webhook URL，因此无法验证真实 Bot/Webhook/频道绑定/媒体接收。
+1. 目前没有 Telegram Bot Token、Webhook Secret、频道管理员权限和公开 HTTPS Webhook URL，因此无法验证真实 Bot/Webhook/频道绑定/媒体接收/发布/删除。
 2. D1 Migration 已提交并通过静态顺序检查，但尚未绑定 Cloudflare D1 并执行；当前开发环境不等价于远端 D1 已迁移。
-3. 阶段 7 的付款凭证通过已有 media asset ID 引用，尚未实现独立 multipart 上传、R2 持久化、病毒扫描和文件访问授权。
-4. 付款 Finance 审核和退款审核已有服务端状态与金额边界，但尚未接支付渠道回调、真实银行对账、幂等外部交易号和生产级审计流水。
-5. 退款和付款的多条并发审核需要真实 D1 事务/锁策略验证；当前代码已做条件更新和金额复查，但没有声称完成远端并发验收。
-6. 排期、Telegram 发布、到期处理、SaaS 订阅、财务统计和管理员后台仍未实现。
-7. 媒体系统已实现入库和相册状态机，但没有真实 Cron settle worker、R2 文件下载、缩略图、病毒扫描、OCR、音频解析和媒体清理任务。
-8. 当前前端业务入口是明确标注的模块壳层，未实现的订单、收入、发布结果不会用固定演示数字填充。
+3. 队列当前使用 D1 表和 Workers Cron polling，没有配置 Cloudflare Queues；真实多实例 claim、恢复 processing 任务和非幂等 Telegram 请求需要生产验证。
+4. Telegram 发布器支持 text、photo、video、document/animation 的基础发送，但还没有媒体组原子发布、实体格式转换、pin/edit 策略和多条 message_id 完整记录。
+5. 到期处理当前按最新成功发布日志尝试 deleteMessage；删除权限、删除失败重试和多条消息的完整清理仍需增强。
+6. 排期支持 once/daily/weekly/custom 字段保存，但周期排期的下一次实例生成尚未实现；当前每条排期创建一个发布任务。
+7. 付款凭证仍通过 media asset ID 引用，尚未实现独立 multipart 上传、R2 持久化、病毒扫描和文件访问授权。
+8. 支付回调、生产财务对账、SaaS 订阅、财务统计和管理员后台仍未实现。

@@ -33,23 +33,29 @@
 
 ## 阶段 6：CRM、套餐、订单和编辑器（已完成代码基线，D1 远端执行待配置）
 
-- [x] CRM 客户、广告套餐、订单、编辑器、订单修订和素材引用。
+- [x] CRM、广告套餐、订单、编辑器、订单修订和素材引用。
 - [x] 订单创建前验证客户、套餐、active 频道和 ready 素材的 Tenant/Workspace 归属。
 - [ ] 真实 D1 事务、订单审批 UI、排期与发布队列联调。
 
 ## 阶段 7：付款凭证、Finance 审核与退款流水（已完成代码基线，D1 远端执行待配置）
 
-- [x] 使用媒体素材作为付款凭证引用，提交付款方式、金额、交易号和凭证素材。
-- [x] 付款金额按订单应收和已提交/已审核金额累计校验，阻止超额付款。
-- [x] Finance 待审核付款队列，支持 approved/rejected、审核人、时间和备注。
-- [x] 审核通过后按累计审核金额同步订单 `payment_status`，全额支付时同步订单为 paid。
-- [x] 退款申请和独立退款流水，支持部分退款、退款理由、退款方式和交易号。
-- [x] Finance 退款审核，按已批准退款累计金额阻止超额退款并同步 refunded/partially_refunded。
+- [x] 付款凭证引用、Finance 审核、付款状态同步、退款申请和退款审核。
 - [ ] 真实 D1 事务、支付渠道回调、文件上传/R2、生产财务对账和审计日志联调。
+
+## 阶段 8：排期、Telegram 发布队列与到期处理（已完成代码基线，外部 Telegram/D1 联调待配置）
+
+- [x] 排期类型和 plannedAt/plannedEndAt 校验，只有 approved 订单可以入排期。
+- [x] 创建排期时写入唯一发布任务，任务使用 `schedule:<scheduleId>` 幂等键。
+- [x] 队列 claim 使用 queued → processing 条件更新，避免同一任务被重复 claim。
+- [x] Telegram 发布支持 text、photo、video、document/animation，并保存成功 message_id。
+- [x] Telegram 429 使用 retry_after；网络/服务错误使用指数退避并受 max_attempts 限制。
+- [x] 发布成功同步订单为 published；失败最终状态为 failed/uncertain。
+- [x] Cron scheduled handler 执行到期任务，按 planned_end_at 删除已发布消息并同步 completed。
+- [ ] 真实 Cloudflare D1/Workers Cron、Telegram Bot 权限、Queues 和多消息/多媒体外部联调。
 
 ## 后续阶段（未开始）
 
-- [ ] 排期与发布、到期处理、SaaS 订阅、财务统计、管理员后台和最终交付。
+- [ ] SaaS 订阅、财务统计、管理员后台、运营仪表盘和最终交付。
 
 ## 真实验收边界
 

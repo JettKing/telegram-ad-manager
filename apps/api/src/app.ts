@@ -8,6 +8,7 @@ import { ChannelCheckError, D1ChannelRepository, TelegramBotApiClient, verifyTel
 import { D1MediaRepository } from "./media.js";
 import { BusinessValidationError, D1BusinessRepository, canTransitionOrder, parseCustomerInput, parsePackageInput, type OrderStatus } from "./business.js";
 import { D1PaymentRepository, parsePaymentInput, parsePaymentReviewInput, parseRefundInput, parseRefundReviewInput } from "./payments.js";
+import { D1PublishRepository, parseScheduleInput } from "./publishing.js";
 
 export interface ApiBindings {
   DB?: D1Like;
@@ -108,7 +109,7 @@ app.get("/health/ready", (context) => {
 });
 
 app.get("/api/v1/health", (context) => context.json(success(healthPayload(runtimeEnv(context.env)), requestId(context))));
-app.get("/api/v1/metadata", (context) => context.json(success({ name: "TG Ad Manager", version, stage: "payments-finance-refunds", externalIntegrations: { telegram: telegramServiceState(runtimeEnv(context.env).TELEGRAM_BOT_TOKEN), cloudflareD1: runtimeEnv(context.env).DB ? "binding_present" : "not_configured" } }, requestId(context))));
+app.get("/api/v1/metadata", (context) => context.json(success({ name: "TG Ad Manager", version, stage: "scheduling-publish-expiration", externalIntegrations: { telegram: telegramServiceState(runtimeEnv(context.env).TELEGRAM_BOT_TOKEN), cloudflareD1: runtimeEnv(context.env).DB ? "binding_present" : "not_configured" } }, requestId(context))));
 
 app.post("/api/v1/auth/telegram", async (context) => {
   const env = runtimeEnv(context.env);
@@ -320,6 +321,28 @@ app.post("/api/v1/orders/:orderId/transition", requireAuth("order:write"), async
   if (!env.DB || !auth) return context.json(failure("ORDER_NOT_CONFIGURED", "订单数据库上下文尚未配置", requestId(context)), 503);
   try { const body = await context.req.json() as Record<string, unknown>; const to = body.to; if (typeof to !== "string" || !["pending_payment", "paid", "pending_review", "approved", "scheduled", "publishing", "published", "completed", "cancelled", "refunded", "partially_refunded", "failed"].includes(to)) throw new BusinessValidationError("INVALID_ORDER_STATUS", "订单目标状态不合法"); const updated = await new D1BusinessRepository(env.DB).transitionOrder({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("orderId"), to as OrderStatus, typeof body.reason === "string" ? body.reason : "status_changed", new Date().toISOString()); return context.json(success({ updated, status: to }, requestId(context))); }
   catch (error) { return businessError(context, error, requestId(context)); }
+});
+
+app.get("/api/v1/schedules", requireAuth("publish:read"), async (context) => {
+  const env = runtimeEnv(context.env); const auth = context.get("auth");
+  if (!env.DB || !auth) return context.json(failure("SCHEDULE_NOT_CONFIGURED", "排期数据库上下文尚未配置", requestId(context)), 503);
+  return context.json(success({ schedules: await new D1PublishRepository(env.DB).listSchedules(auth.tenantId, auth.workspaceId) }, requestId(context)));
+});
+
+app.get("/api/v1/publish-tasks", requireAuth("publish:read"), async (context) => {
+  const env = runtimeEnv(context.env); const auth = context.get("auth");
+  if (!env.DB || !auth) return context.json(failure("PUBLISH_QUEUE_NOT_CONFIGURED", "发布队列数据库上下文尚未配置", requestId(context)), 503);
+  return context.json(success({ tasks: await new D1PublishRepository(env.DB).listTasks(auth.tenantId, auth.workspaceId) }, requestId(context)));
+});
+
+app.post("/api/v1/orders/:orderId/schedules", requireAuth("publish:write"), async (context) => {
+  const env = runtimeEnv(context.env); const auth = context.get("auth");
+  if (!env.DB || !auth) return context.json(failure("SCHEDULE_NOT_CONFIGURED", "排期数据库上下文尚未配置", requestId(context)), 503);
+  try {
+    const input = parseScheduleInput(await context.req.json());
+    const result = await new D1PublishRepository(env.DB).createSchedule({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("orderId"), input, new Date().toISOString());
+    return context.json(success({ ...result, status: "queued" }, requestId(context)), 201);
+  } catch (error) { return businessError(context, error, requestId(context)); }
 });
 
 function channelApiConfig(env: ApiBindings): { db: D1Like; botIdentityId: string; client: TelegramBotApiClient } | null {

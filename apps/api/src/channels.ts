@@ -28,10 +28,11 @@ interface TelegramApiEnvelope<T> {
   result?: T;
   error_code?: number;
   description?: string;
+  parameters?: { retry_after?: number };
 }
 
 export class TelegramApiError extends Error {
-  constructor(public readonly method: string, public readonly errorCode: number | undefined, message: string) {
+  constructor(public readonly method: string, public readonly errorCode: number | undefined, message: string, public readonly retryAfterSeconds?: number) {
     super(message);
     this.name = "TelegramApiError";
   }
@@ -60,7 +61,7 @@ export class TelegramBotApiClient implements TelegramBotApi {
       throw new TelegramApiError(method, response.status, "TELEGRAM_INVALID_RESPONSE");
     }
     if (!response.ok || !envelope.ok || envelope.result === undefined) {
-      throw new TelegramApiError(method, envelope.error_code ?? response.status, envelope.description ?? "Telegram API request failed");
+      throw new TelegramApiError(method, envelope.error_code ?? response.status, envelope.description ?? "Telegram API request failed", envelope.parameters?.retry_after);
     }
     return envelope.result;
   }
@@ -75,6 +76,34 @@ export class TelegramBotApiClient implements TelegramBotApi {
 
   getChatMember(chatId: string, userId: number): Promise<TelegramChatMember> {
     return this.call<TelegramChatMember>("getChatMember", { chat_id: chatId, user_id: userId });
+  }
+
+  sendMessage(chatId: string, text: string): Promise<{ message_id: number }> {
+    return this.call("sendMessage", { chat_id: chatId, text });
+  }
+
+  sendPhoto(chatId: string, fileId: string, caption?: string): Promise<{ message_id: number }> {
+    return this.call("sendPhoto", { chat_id: chatId, photo: fileId, ...(caption ? { caption } : {}) });
+  }
+
+  sendVideo(chatId: string, fileId: string, caption?: string): Promise<{ message_id: number }> {
+    return this.call("sendVideo", { chat_id: chatId, video: fileId, ...(caption ? { caption } : {}) });
+  }
+
+  sendDocument(chatId: string, fileId: string, caption?: string): Promise<{ message_id: number }> {
+    return this.call("sendDocument", { chat_id: chatId, document: fileId, ...(caption ? { caption } : {}) });
+  }
+
+  deleteMessage(chatId: string, messageId: number): Promise<boolean> {
+    return this.call("deleteMessage", { chat_id: chatId, message_id: messageId });
+  }
+
+  pinChatMessage(chatId: string, messageId: number): Promise<boolean> {
+    return this.call("pinChatMessage", { chat_id: chatId, message_id: messageId, disable_notification: true });
+  }
+
+  unpinChatMessage(chatId: string, messageId?: number): Promise<boolean> {
+    return this.call("unpinChatMessage", { chat_id: chatId, ...(messageId ? { message_id: messageId } : {}) });
   }
 }
 
