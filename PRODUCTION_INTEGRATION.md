@@ -1,20 +1,28 @@
-# Production Integration — Stage 9–10
+# Production Integration — Stage 9–11
 
 ## 只读审计结果
 
-2026-11-17 通过 Cloudflare MCP 对唯一授权账户 `bf9869d76a7fcbd9f75aefc5f98f3fbb` 执行只读盘点。目标 D1 是 `tg-ad-manager`，ID 为 `d9a4ad54-d504-40d6-abd5-a3e978a8ff5a`；目标队列是 `tg-ad-manager-publish`，ID 为 `9fc8423242564c1e814108cdf5883208`。当前账户没有名为 `tg-ad-manager-api` 的 Worker；队列当前没有 producer 或 consumer。
+Cloudflare 账户 `bf9869d76a7fcbd9f75aefc5f98f3fbb` 的目标 D1 为 `tg-ad-manager` / `d9a4ad54-d504-40d6-abd5-a3e978a8ff5a`，目标 Queue 为 `tg-ad-manager-publish` / `9fc8423242564c1e814108cdf5883208`。审计时 Worker `tg-ad-manager-api` 尚未创建，Queue 没有 producer 或 consumer；核心业务表行数为 0。
 
-目标 D1 已有 0001–0008 production schema，包含 `publish_tasks`、`publish_task_logs`、`ad_schedules`、`ad_creatives`、`creative_media`、`payment_submissions` 等表；核心业务表当前行数为 0。
+## 阶段 11 已接入
 
-## 阶段 10 adapter
+在 `D1_SCHEMA_CONTRACT=production-0008` 下，API 现在按环境选择 production adapter：
 
-新增 `apps/api/src/production-publishing.ts`，适配生产任务的 available_at/locked_at/completed_at/telegram_message_ids_json，生产排期的 start_at/end_at/timezone/repeat_until，生产订单内容和 creative_media，以及频道权限表 `telegram_channel_permissions`。
+- identity/session：`users.telegram_username`、tenant/workspace membership、`user_sessions.token_hash`。
+- channels：`telegram_channels` 和 `telegram_channel_permissions`。
+- CRM/business：`ad_customers`、`ad_packages`、`ad_orders`、`ad_creatives`、`creative_media`。
+- finance：`payment_submissions` 和 `financial_ledger_entries`。
+- Telegram webhook：生产 `telegram_updates` 与 `telegram_webhook_logs` 字段。
 
-生产 Worker Cron 在 `D1_SCHEMA_CONTRACT=production-0008` 时选择该适配器。生产配置已移除尚未创建的 DLQ 声明，避免候选部署配置引用不存在资源。
+阶段 10 的 `production-publishing.ts` 继续负责 Cron 发布路径。
 
-## 关键兼容性结论
+## 安全阻塞
 
-仓库其他阶段仍包含旧 schema 查询：`ad_publish_tasks`、`ad_publish_logs`、`media_assets`、`ad_order_payments` 和旧频道权限字段。因此当前 Worker 仍不能对整个应用直接生产发布；阶段 10 只把发布 Cron 的核心路径切换到真实 schema，认证、媒体、付款和 API 路由需继续适配。
+生产 `creative_media` 当前没有 Telegram source message/chat 幂等字段，不能安全承接 Webhook 媒体写入；生产 schema 当前没有可确认的退款申请表，退款 API 返回 `REFUND_SCHEMA_UNAVAILABLE`；排期 HTTP API 还需切换到生产发布 adapter。以上路径不会用旧表名“猜测写入”。
+
+## 本地门禁
+
+`pnpm cf:config:check`、`pnpm db:check`、`pnpm typecheck`、`pnpm lint`、`pnpm test`（33 tests）、`pnpm build` 均通过。
 
 ## 生产安全边界
 

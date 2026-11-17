@@ -1,8 +1,9 @@
 # KNOWN_ISSUES
 
-1. Cloudflare D1 生产 schema 与仓库旧 API 仍不完全一致。阶段 10 只适配了排期和发布任务；认证、频道、媒体、CRM、付款 API 还需要统一 production adapter。
-2. 目标账户当前没有 `tg-ad-manager-api` Worker，Queue `tg-ad-manager-publish` 没有 producer/consumer，DLQ 尚未创建。
-3. `wrangler.production.jsonc` 已移除尚未创建的 DLQ 声明；如果生产需要 DLQ，必须先创建并在后续变更中显式绑定。
-4. Telegram Token、Webhook Secret、Session Secret 和 Bot identity 尚未写入 Cloudflare Secrets。
-5. 阶段 10 只完成本地 adapter 验证，没有执行 D1 migration、Queue 创建、Worker 上传、Secret 写入或 Telegram Webhook 切换。
-6. 真实环境仍需验证 D1 并发 claim、Queue 重试、Cron 触发、Telegram 429、非幂等请求恢复、完整 message ID 删除和跨租户隔离。
+1. 生产 `creative_media` 没有 Telegram source message/chat 幂等字段，因此 production media adapter 只提供读取；Webhook 媒体入库会返回 `MEDIA_SOURCE_SCHEMA_REQUIRED`。
+2. 生产 D1 审计中没有发现已确认的退款申请表，production payments adapter 只实现付款凭证和 Finance 审核；退款接口返回 `REFUND_SCHEMA_UNAVAILABLE`。
+3. `/api/v1/schedules` 和创建排期接口仍实例化旧 `D1PublishRepository`，需要下一步复用 `production-publishing.ts` 的 HTTP 查询和创建实现。
+4. Cloudflare Worker、Queue consumer/DLQ、Secrets、Webhook URL 和 Telegram 真实联调尚未执行；当前只完成只读资源审计和本地代码门禁。
+5. 生产 adapter 尚未经过真实 D1 写入回归；任何远程 migration 或 deploy 都必须在独立确认后执行。
+6. 订阅计划和权益目前先接入本地 schema；`production-0008` contract 会明确返回 `SUBSCRIPTION_SCHEMA_NOT_CONFIGURED`，不会假设生产已有订阅表。
+7. 付费升级目前只创建 pending checkout request，尚未接入真实支付网关或 Finance 人工审核动作。

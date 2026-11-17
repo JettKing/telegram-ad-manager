@@ -95,6 +95,14 @@ async function all<T>(db: D1Like, query: string, ...values: unknown[]): Promise<
 export class ProductionPublishRepository {
   constructor(private readonly db: D1Like) {}
 
+  async listSchedules(tenantId: string, workspaceId: string): Promise<Array<Record<string, unknown>>> {
+    return all<Record<string, unknown>>(this.db, `SELECT id, order_id, channel_id, schedule_type AS scheduleType, start_at AS startAt, end_at AS endAt, timezone, repeat_until AS repeatUntil, interval_minutes AS intervalMinutes, occurrence_limit AS occurrenceLimit, status, created_at AS createdAt, updated_at AS updatedAt FROM ad_schedules WHERE tenant_id = ? AND workspace_id = ? ORDER BY start_at DESC LIMIT 200`, tenantId, workspaceId);
+  }
+
+  async listTasks(tenantId: string, workspaceId: string): Promise<Array<Record<string, unknown>>> {
+    return all<Record<string, unknown>>(this.db, `SELECT id, order_id, schedule_id, channel_id, status, attempts, max_attempts AS maxAttempts, available_at AS availableAt, locked_at AS lockedAt, completed_at AS completedAt, telegram_message_ids_json AS telegramMessageIdsJson, last_error_code AS lastErrorCode, last_error_message AS lastErrorMessage, created_at AS createdAt, updated_at AS updatedAt FROM publish_tasks WHERE tenant_id = ? AND workspace_id = ? ORDER BY created_at DESC LIMIT 200`, tenantId, workspaceId);
+  }
+
   private async getOrder(scope: { tenantId: string; workspaceId: string }, orderId: string): Promise<{ id: string; status: string; channel_id: string }> {
     const order = await this.db.prepare("SELECT id, status, channel_id FROM ad_orders WHERE id = ? AND tenant_id = ? AND workspace_id = ? LIMIT 1").bind(orderId, scope.tenantId, scope.workspaceId).first<{ id: string; status: string; channel_id: string }>();
     if (!order) throw new BusinessValidationError("ORDER_NOT_FOUND", "生产订单不存在或不属于当前工作空间");
