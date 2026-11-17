@@ -1,0 +1,14 @@
+{
+  "routes": [
+    { "path": "/", "title": "概览" },
+    { "path": "/workspace", "title": "工作空间" },
+    { "path": "/channels", "title": "频道" },
+    { "path": "/customers", "title": "客户" },
+    { "path": "/packages", "title": "广告套餐" },
+    { "path": "/orders", "title": "广告订单" },
+    { "path": "/schedules", "title": "排期日历" },
+    { "path": "/media", "title": "素材中心" },
+    { "path": "/publishes", "title": "发布任务" },
+    { "path": "/subscription", "title": "会员订阅" }
+  ]
+}

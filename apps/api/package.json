@@ -1,0 +1,19 @@
+{
+  "name": "@tg-ad-manager/api",
+  "private": true,
+  "version": "1.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc --outDir dist --noEmit false",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tg-ad-manager/contracts": "workspace:*",
+    "@tg-ad-manager/telegram": "workspace:*",
+    "@hono/node-server": "^1.13.7",
+    "hono": "^4.6.14",
+    "zod": "^3.23.8"
+  }
+}
