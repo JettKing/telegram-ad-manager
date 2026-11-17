@@ -20,7 +20,7 @@ export interface PublishContent {
 interface ScheduleRow { id: string; order_id: string; channel_id: string; schedule_type: ScheduleType; planned_at: string; paused_at?: string; cancelled_at?: string; created_at: string; updated_at: string }
 interface TaskRow { id: string; order_id: string; schedule_id?: string; idempotency_key: string; status: PublishTaskStatus; attempts: number; max_attempts: number; next_attempt_at?: string; last_error_code?: string; last_error_message?: string; created_at: string; updated_at: string }
 interface PayloadRow { task_id: string; order_id: string; channel_id: string; telegram_chat_id: string; content_json: string; planned_at: string; status: string }
-interface AssetRow { id: string; media_type: "text" | "photo" | "video" | "animation" | "document" | "album"; file_id?: string; caption?: string; sort_order: number }
+export interface AssetRow { id: string; media_type: "text" | "photo" | "video" | "animation" | "document" | "album"; file_id?: string; caption?: string; sort_order: number }
 interface ExpirationRow { order_id: string; telegram_chat_id: string; telegram_message_id: number; planned_end_at: string }
 
 export interface PublishRuntimeEnv {
@@ -167,9 +167,9 @@ export class D1PublishRepository {
 export class TelegramPublisher {
   constructor(public readonly client: TelegramBotApiClient) {}
 
-  async publish(chatId: string, content: PublishContent, assets: AssetRow[]): Promise<number> {
+  async publishMany(chatId: string, content: PublishContent, assets: AssetRow[]): Promise<number[]> {
     const caption = content.text || undefined;
-    let lastMessageId: number | undefined;
+    const messageIds: number[] = [];
     for (const asset of assets) {
       if (!asset.file_id) continue;
       const result = asset.media_type === "photo"
@@ -179,11 +179,16 @@ export class TelegramPublisher {
           : asset.media_type === "document" || asset.media_type === "animation"
             ? await this.client.sendDocument(chatId, asset.file_id, caption)
             : undefined;
-      if (result) lastMessageId = result.message_id;
+      if (result) messageIds.push(result.message_id);
     }
-    if (lastMessageId !== undefined) return lastMessageId;
+    if (messageIds.length > 0) return messageIds;
     if (!content.text.trim()) throw new PublishError("EMPTY_PUBLISH_CONTENT", "订单没有可发布的文本或素材", false);
-    return (await this.client.sendMessage(chatId, content.text)).message_id;
+    return [(await this.client.sendMessage(chatId, content.text)).message_id];
+  }
+
+  async publish(chatId: string, content: PublishContent, assets: AssetRow[]): Promise<number> {
+    const messageIds = await this.publishMany(chatId, content, assets);
+    return messageIds[messageIds.length - 1];
   }
 }
 

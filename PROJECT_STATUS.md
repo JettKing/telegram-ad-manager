@@ -2,24 +2,25 @@
 
 ## 当前状态
 
-阶段 9 已开始，完成了真实 Cloudflare 资源的只读审计和部署前安全准备。当前没有执行任何生产写入或公开发布。
+阶段 10 已完成生产发布 schema adapter 的代码基线。本地 Workers Cron 在 `D1_SCHEMA_CONTRACT=production-0008` 时会选择生产适配器，避免直接使用本地 `ad_*` 发布表查询生产 D1。
 
-## Cloudflare 资源审计
+## 生产适配器
 
-唯一授权账户：`bf9869d76a7fcbd9f75aefc5f98f3fbb`。
+`apps/api/src/production-publishing.ts` 使用生产 D1 的 `publish_tasks`、`publish_task_logs`、`ad_schedules`、`ad_orders`、`creative_media` 和 `telegram_channel_permissions`。它实现生产排期创建、queued → processing 条件 claim、Telegram payload 装载、完整 message ID 写回、retry/dead_letter/uncertain 状态和到期删除。
 
-目标 D1：`tg-ad-manager`，ID `d9a4ad54-d504-40d6-abd5-a3e978a8ff5a`。目标 Queue：`tg-ad-manager-publish`，ID `9fc8423242564c1e814108cdf5883208`。目标账户尚无 `tg-ad-manager-api` Worker，Queue 当前无 producer/consumer。
+生产排期字段使用 `start_at`、`end_at`、`timezone`、`repeat_until`；没有 endAt 的生产排期会被拒绝。生产素材优先读取 `creative_media`，没有素材表记录时回退到订单的 `media_file_id` 或 `media_items_json`。
 
-D1 不是空 schema：已有 `schema_migrations` 0001–0008 和生产表 `publish_tasks`、`publish_task_logs`、`ad_schedules`、`ad_creatives`、`creative_media`、`payment_submissions`。当前关键业务表行数为 0。
+Workers `scheduled` 入口会依据 `D1_SCHEMA_CONTRACT` 选择 `processProductionDuePublishTasks` 或旧开发适配器。生产配置已声明 `D1_SCHEMA_CONTRACT=production-0008`。
 
-## 关键阻塞
+## 检查证据
 
-生产 D1 与当前仓库 Migration/代码不是同一 schema：生产发布表使用 `publish_tasks`，而仓库发布器使用 `ad_publish_tasks`；生产素材使用 `creative_media`，而仓库使用 `media_assets`；生产支付使用 `payment_submissions`，而仓库使用 `ad_order_payments`。生产排期使用 `start_at/end_at/timezone`，而仓库使用 `planned_at`。直接部署会造成 SQL 失败，不能以“业务数据为 0”作为跳过适配的理由。
+- `pnpm cf:config:check`：通过。
+- `pnpm db:check`：通过，10 份本地 Migration 连续有效。
+- `pnpm typecheck`：通过。
+- `pnpm lint`：通过。
+- `pnpm test`：通过，9 个测试文件、33 个测试。
+- `pnpm build`：通过。
 
-## 已完成准备
+## 尚未完成
 
-新增 `wrangler.production.jsonc`，绑定真实 D1、Queue、账户和 5 分钟 Cron；新增 `pnpm cf:config:check`；新增 `PRODUCTION_INTEGRATION.md` 记录审计证据、部署顺序和阻塞项。没有写入 Token、Secret 或私密凭据。
-
-## 下一步
-
-先实现 production schema adapter 和 Queue consumer，再在明确确认后执行真实 D1 迁移、DLQ 创建、Worker 上传、Secret 写入、Cron 验证和 Telegram Webhook/频道/发布联调。
+认证、频道、媒体接收、CRM、付款和 API 路由仍有旧 schema 查询，需要继续建立统一 production adapter。Queue consumer、DLQ、Cloudflare Secrets、Worker 上传、Cron 运行验证和 Telegram 真实联调仍未执行。

@@ -1,11 +1,11 @@
 # TEST_REPORT
 
-## 阶段 8 结果（2026-11-17）
+## 阶段 10 结果（2026-11-17）
 
-`pnpm db:check` 通过，10 份 Migration 编号连续；`pnpm typecheck`、`pnpm lint` 和 `pnpm build` 通过。新增排期和发布测试后，`pnpm test` 共通过 8 个测试文件、30 个测试。
+生产 schema adapter 新增测试后，`pnpm test` 通过 9 个测试文件、33 个测试。新增覆盖生产排期必须有 endAt、旧字段到生产字段的显式适配、默认时区、未配置依赖时不写 D1 等边界。
 
-新增测试覆盖排期时间窗口、到期时间、指数退避、Telegram 429 retry_after、永久 API 错误分类、photo caption 发布和纯文本 fallback。前置阶段测试继续通过。
+`pnpm cf:config:check`、`pnpm db:check`、`pnpm typecheck`、`pnpm lint` 和 `pnpm build` 全部通过。
 
-## 外部集成边界
+## 外部边界
 
-发布器和 Cron handler 已实现，但尚未在真实 Cloudflare D1、Workers Cron、Queues、Telegram Bot API 和频道权限上联调。当前测试不声称真实消息已经发送、删除或完成多实例并发验收。
+本报告只证明本地 adapter 和配置校验，不证明真实 D1 写入、Workers Cron 运行、Queue 消费、Telegram 发布/删除或 Secret 配置已经完成。生产 D1 只读审计显示其业务数据目前为 0，但 schema 已存在且与旧本地契约不同。

@@ -1,17 +1,18 @@
 # TG Ad Manager V1.1
 
-TG Ad Manager 是 Telegram 广告管理 SaaS 的工程基线，按多租户、可审计、可恢复、真实外部服务分层建设。当前已完成阶段 1 工程基础、阶段 2 Telegram 认证/Webhook 代码基线和阶段 3 用户 upsert、平台会话、RBAC 代码基线。
+TG Ad Manager 是 Telegram 广告管理 SaaS 的工程基线，按多租户、可审计、可恢复、真实外部服务分层建设。当前阶段聚焦 Cloudflare 生产 schema adapter，避免把开发环境的旧 `ad_*` 契约直接部署到真实 D1。
 
 ## 当前阶段
 
-Telegram Mini App initData 已支持真实 HMAC-SHA256 验签；认证成功后可通过 D1 repository 幂等创建用户、默认租户/工作空间和 Owner 成员关系，并签发可撤销的 HMAC Bearer Session。`/api/v1/auth/me`、`/api/v1/auth/logout`、`/api/v1/workspace/context` 和 `/api/v1/finance/access` 已提供受保护边界。
+已完成 Cloudflare 账户、D1、Queue 和 Worker 资源的只读审计，并确认目标 D1 已存在独立 production schema。发布 Cron 已支持通过 `D1_SCHEMA_CONTRACT=production-0008` 选择生产发布适配器，适配 `publish_tasks`、`publish_task_logs`、`ad_schedules`、`creative_media` 和 `telegram_channel_permissions`。
 
-当前没有把未配置的 Telegram、Cloudflare D1、Queues、Cron、R2 或订单/收入数据伪装成已完成。真实外部联调与业务模块仍按 `TODO.md` 分阶段推进。
+当前没有把未配置的 Telegram、Cloudflare Worker、Queues、Cron、R2 或订单/收入数据伪装成已完成。认证、媒体、CRM、付款等 API 仍需继续适配生产 schema，真实外部联调按 `TODO.md` 分阶段推进。
 
 ## 开发
 
 ```bash
 pnpm install
+pnpm cf:config:check
 pnpm db:check
 pnpm typecheck
 pnpm lint
@@ -29,8 +30,10 @@ pnpm dev
 - `plan.md`：实施、架构和 UI 设计计划。
 - `TODO.md`：按阶段拆分的验收任务。
 - `PROJECT_STATUS.md`：真实当前状态。
-- `DATABASE_SCHEMA.md`：表边界、约束和迁移说明。
+- `PRODUCTION_INTEGRATION.md`：Cloudflare 生产资源审计和部署边界。
+- `DATABASE_SCHEMA.md`：仓库表边界、约束和迁移说明。
 - `API_SPEC.md`：已实现与计划 API。
-- `DEPLOYMENT.md`：本地基线与 Cloudflare 目标部署条件。
+- `DEPLOYMENT.md`：本地基线、生产配置和 Cloudflare 操作顺序。
 - `TEST_REPORT.md`：实际测试命令和外部联调边界。
 - `KNOWN_ISSUES.md`：未配置的外部依赖与当前限制。
+- `docs/production-schema-adapter.md`：生产 D1 发布契约适配说明。

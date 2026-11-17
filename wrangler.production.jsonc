@@ -5,6 +5,9 @@
   "compatibility_date": "2026-11-17",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  "vars": {
+    "D1_SCHEMA_CONTRACT": "production-0008"
+  },
   "d1_databases": [
     {
       "binding": "DB",
@@ -22,8 +25,7 @@
         "queue": "tg-ad-manager-publish",
         "max_batch_size": 10,
         "max_batch_timeout": 30,
-        "max_retries": 5,
-        "dead_letter_queue": "tg-ad-manager-publish-dlq"
+        "max_retries": 5
       }
     ]
   },

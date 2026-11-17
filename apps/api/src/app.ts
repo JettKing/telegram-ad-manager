@@ -16,6 +16,7 @@ export interface ApiBindings {
   TELEGRAM_WEBHOOK_SECRET?: string;
   TELEGRAM_BOT_IDENTITY_ID?: string;
   TELEGRAM_API_BASE_URL?: string;
+  D1_SCHEMA_CONTRACT?: string;
   DATABASE_URL?: string;
   R2_BUCKET?: string;
   SESSION_SECRET?: string;

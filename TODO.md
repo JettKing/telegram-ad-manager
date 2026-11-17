@@ -2,22 +2,27 @@
 
 ## 阶段 1–8：代码基线
 
-阶段 1–8 的认证、RBAC、频道、媒体、CRM、订单、付款、退款、排期和发布队列代码基线已完成；本地门禁通过，真实外部联调依赖生产配置。
+认证、RBAC、频道、媒体、CRM、订单、付款、退款、排期和发布队列代码基线已完成；本地门禁通过，真实外部联调依赖生产配置。
 
-## 阶段 9：生产环境部署、Cloudflare 真实服务接入与联调
+## 阶段 9：生产资源审计与部署准备
 
-- [x] 只读盘点唯一授权 Cloudflare 账户、D1、Workers 和 Queues 资源。
-- [x] 确认目标 D1 `tg-ad-manager` 与目标 Queue `tg-ad-manager-publish` 的真实 ID、状态和现有 schema。
-- [x] 确认目标 D1 已有独立 0001–0008 production schema，且核心表当前没有业务数据。
-- [x] 创建真实资源绑定的 `wrangler.production.jsonc`，不包含 Secret。
-- [x] 增加 `pnpm cf:config:check`，阻止占位符和错误资源绑定进入部署流程。
-- [ ] 完成仓库代码到 production schema 的 adapter：`publish_tasks`、`publish_task_logs`、`creative_media`、`payment_submissions`、生产 `ad_schedules` 字段。
-- [ ] 补齐 Queue consumer、DLQ 策略和 queue_dispatched_at 状态闭环。
-- [ ] 通过 Cloudflare Secret 配置 Telegram Token、Webhook Secret、Session Secret 和 Bot identity。
-- [ ] 在明确确认后执行生产 D1 migration、创建 DLQ、上传 Worker、设置 Cron 和 Telegram Webhook。
-- [ ] 使用真实测试频道完成 auth、channel binding、media ingest、publish、429 retry、expiration delete 联调。
-- [ ] 保留每次生产操作的 Cloudflare 返回证据、Worker version、D1 migration 记录和 Telegram API 响应摘要。
+- [x] 只读盘点 Cloudflare 账户、D1、Workers 和 Queues。
+- [x] 识别生产 D1 与仓库旧 Migration 的 schema 差异。
+- [x] 写入真实资源绑定的 `wrangler.production.jsonc` 和配置校验脚本。
+- [ ] 在完成 schema adapter 后执行真实 D1 migration、Queue、Worker 和 Secret 变更。
+
+## 阶段 10：生产 schema adapter
+
+- [x] 适配生产 `publish_tasks`、`publish_task_logs` 的 available_at/locked_at/completed_at/telegram_message_ids_json 字段。
+- [x] 适配生产 `ad_schedules.start_at/end_at/timezone/repeat_until` 字段，并要求生产排期具有 endAt。
+- [x] 适配生产 `ad_orders.content_text/media_type/media_file_id/media_items_json` 和 `creative_media` 素材来源。
+- [x] 适配 `telegram_channel_permissions.can_post_messages` 发布权限检查。
+- [x] 生产成功发布保存完整 message ID 列表，失败按生产状态值写入 queued/dead_letter/uncertain。
+- [x] Workers Cron 根据 `D1_SCHEMA_CONTRACT=production-0008` 选择生产发布适配器。
+- [x] 增加生产排期输入、依赖未配置保护和完整本地门禁测试。
+- [ ] 将 CRM、认证、频道、媒体、付款 API 全部迁移到生产 schema adapter。
+- [ ] 补齐 Queue consumer、DLQ、Cloudflare Secrets 和真实 Telegram 联调。
 
 ## 生产安全边界
 
-阶段 9 当前只执行了 Cloudflare 只读审计和本地配置准备，没有执行 D1 写入、migration、Worker 上传、Queue 创建、Secret 写入或 Webhook 切换。生产 D1 虽然当前业务数据为 0，仍不能跳过 schema 兼容性适配和变更确认。
+阶段 9–10 当前只执行了 Cloudflare 只读审计和本地代码验证，没有执行 D1 migration、Queue 创建、Worker 上传、Secret 写入或 Telegram Webhook 切换。
