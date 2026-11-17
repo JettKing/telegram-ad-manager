@@ -13,13 +13,13 @@ interface WorkerExecutionContext {
 }
 
 function processScheduledPublishTasks(env: ApiBindings) {
-  return env.D1_SCHEMA_CONTRACT === "production-0008"
+  return env.D1_SCHEMA_CONTRACT === "production-0009"
     ? processProductionDuePublishTasks(env)
     : processDuePublishTasks(env);
 }
 
 function processScheduledSubscriptions(env: ApiBindings) {
-  if (!env.DB || env.D1_SCHEMA_CONTRACT === "production-0008") return Promise.resolve({ renewed: 0, expired: 0 });
+  if (!env.DB || env.D1_SCHEMA_CONTRACT === "production-0009") return Promise.resolve({ renewed: 0, expired: 0 });
   return new SubscriptionRepository(env.DB).processDueSubscriptions();
 }
 

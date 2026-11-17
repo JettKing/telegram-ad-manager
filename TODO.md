@@ -8,7 +8,7 @@
 
 - [x] 只读审计 Cloudflare 账户、D1、Worker 和 Queue。
 - [x] 完成生产发布 Cron 的 `publish_tasks`、`ad_schedules`、`ad_orders`、`creative_media` adapter。
-- [x] 保留 `D1_SCHEMA_CONTRACT=production-0008` 开关，避免开发 schema 查询误用于生产。
+- [x] 使用 `D1_SCHEMA_CONTRACT=production-0009` 开关，避免开发 schema 查询误用于生产。
 
 ## 阶段 11：其余 API 的生产 schema adapter
 
@@ -19,7 +19,7 @@
 - [x] Webhook update/log 去重：telegram_updates、telegram_webhook_logs。
 - [x] 对生产 schema 缺口返回稳定错误，不回退猜测旧表。
 - [x] 将排期列表、任务列表和创建排期 HTTP API 切换到 production-publishing adapter。
-- [ ] 为媒体 source/message 幂等和相册状态补充生产专用 schema migration。
+- [x] 为媒体 source/message 幂等和相册状态补充并执行生产专用 schema migration。
 - [ ] 评审并创建退款申请表 adapter。
 
 ## 阶段 12：生产排期 API 收口
@@ -54,4 +54,4 @@
 
 ## 生产操作边界
 
-Cloudflare D1 migration、Queue/Worker 创建、Secrets 写入、Worker 上传、Cron 验证和 Telegram Webhook 切换尚未执行；需要在 schema 评审后单独确认。
+生产 D1 媒体 migration 已执行，Queue 已存在；Worker dry-run 已通过。仍待完成 Worker 实际上传、Secrets 写入、Cron 验证、Telegram Webhook 切换和真实 Telegram 发布联调。当前 Worker 上传受 Wrangler OAuth CAPTCHA 阻塞。

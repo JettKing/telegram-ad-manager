@@ -71,3 +71,157 @@ docs/                     运营、恢复和外部服务说明
 ## 6. 完整构建工作流
 
 每个阶段均使用：安装依赖 → 语言诊断 → 单元/契约测试 → typecheck → lint → production build → 代码审查 → 更新状态文档。需要外部服务的验收单独记录“本地/单元/集成/真实外部服务”条件。生产部署前再补充 D1、Queues、Cron、Secrets 和 Webhook 注册，不把本地探针结果写成真实 Telegram 发布验证。
+
+## 7. 阶段 15 架构设计：统计报表、收入分析与 Super Admin Dashboard
+
+### 7.1 目标与边界
+
+阶段 15 为 TG Ad Manager 建立可审计、可复算、严格区分租户范围与平台范围的统计体系，并在现有 React/Vite 管理台中实现两个消费层：
+
+1. 租户运营报表：订单、回款、发布履约、客户和频道表现。
+2. Super Admin Dashboard：全平台租户、订阅、平台收入、订单 GMV、支付审核、运行健康和异常概览。
+
+首版只读取已经落库的业务事实，不在统计接口中创建、修改或补写业务数据。所有金额使用最小货币单位整数（`amount_minor`），前端只负责格式化；所有时间在 API 内按 UTC 存储，并按请求的 IANA 时区做日期边界转换。
+
+阶段 15 不默认引入 OLAP、外部 BI 或 Redis。Cloudflare D1 是当前事实源；生产 D1 Schema 与本地 Schema 不一致时，继续使用 production adapter，并明确返回 schema 不可用错误，不能回退到旧表或演示数据。
+
+### 7.2 统计口径
+
+#### 订单与收入
+
+- 订单数按 `ad_orders.created_at` 计数，可按订单状态筛选；草稿不计入“有效订单”。
+- 应收金额使用开发 Schema 的 `receivable_minor` 或生产等价字段 `total_due_minor`，只作为销售漏斗指标，不等同于已收收入。
+- 已收广告收入优先使用已审核通过的付款事实和 `financial_transactions` 中 `source_type='ad_order'`、`direction='credit'`、`status='confirmed'` 的流水；禁止直接把所有订单金额相加。
+- 退款金额使用已批准退款对应的 debit 流水或退款台账事实；退款不能重复冲减。
+- 净广告收入 = 已收广告收入 - 已确认退款。
+- SaaS 收入使用 `financial_transactions` 中 `source_type='saas_subscription'`、`direction='credit'`、`status='confirmed'` 的流水；订阅申请为 `pending` 时不计收入。
+- 平台总收入 = 广告净收入 + SaaS 收入，并且必须返回分项，避免把租户经营收入和平台订阅收入混淆。
+
+#### 履约与 SaaS 经营
+
+- 发布成功率 = `ad_publish_logs.result='succeeded'` / 已执行发布尝试总数；queued 任务不计失败。
+- `failed` 和 `uncertain` 分开显示；`uncertain` 代表 Telegram 外部结果不确定。
+- MRR：有效月付订阅计划价之和；年付按年价 / 12 归一化；终身计划不计入 MRR，但单独计入一次性收入。
+- 付费租户：当前计划不为 `free` 且状态为 `active` / `trialing` 的租户。
+- 订阅转换率：期间内从 FREE 转为付费的去重租户数 / 期间开始时 FREE 租户数；分母为 0 时返回 `null`，不返回 0。
+- 流失率：期间开始时有效付费订阅、期间结束前变为 `expired` / `cancelled` 且未恢复的租户数 / 期间开始付费租户数。
+- 订阅审核积压：`subscription_checkout_requests.status='pending'` 的数量、最老申请时间和金额。
+
+### 7.3 后端分层
+
+新增 `apps/api/src/analytics.ts`，负责日期范围和时区解析、统一统计 DTO、开发 Schema 查询仓储、权限可调用查询方法和错误映射；新增 `apps/api/src/production-analytics.ts`，负责 `production-0008` 的只读适配。
+
+建议的查询边界：
+
+```ts
+interface AnalyticsScope {
+  tenantId?: string;
+  workspaceId?: string;
+  timezone: string;
+  from: string;
+  to: string;
+}
+
+interface TenantAnalyticsRepository {
+  overview(scope: AnalyticsScope): Promise<AnalyticsOverview>;
+  revenueTrend(scope: AnalyticsScope, grain: "day" | "week" | "month"): Promise<RevenuePoint[]>;
+  orderFunnel(scope: AnalyticsScope): Promise<OrderFunnel>;
+  channelRanking(scope: AnalyticsScope, limit: number): Promise<ChannelMetric[]>;
+  publishingHealth(scope: AnalyticsScope): Promise<PublishingHealth>;
+}
+
+interface PlatformAnalyticsRepository {
+  overview(scope: AnalyticsScope): Promise<PlatformOverview>;
+  tenantGrowth(scope: AnalyticsScope): Promise<GrowthPoint[]>;
+  subscriptionMix(scope: AnalyticsScope): Promise<SubscriptionMix>;
+  revenueBreakdown(scope: AnalyticsScope): Promise<PlatformRevenueBreakdown>;
+  pendingReviews(): Promise<PendingReviewSummary>;
+  operationalHealth(): Promise<OperationalHealth>;
+}
+```
+
+生产 adapter 只允许查询已确认的生产字段。若某项统计依赖生产缺失的订阅、退款、媒体或财务表，返回稳定错误码 `ANALYTICS_SCHEMA_UNAVAILABLE`，Dashboard 显示“生产 Schema 未接入”，不能显示伪造的 0。
+
+### 7.4 API 契约
+
+租户范围：
+
+- `GET /api/v1/analytics/overview`
+- `GET /api/v1/analytics/revenue?from=&to=&grain=&timezone=`
+- `GET /api/v1/analytics/orders/funnel?from=&to=`
+- `GET /api/v1/analytics/channels?from=&to=&limit=`
+- `GET /api/v1/analytics/publishing?from=&to=`
+
+平台范围：
+
+- `GET /api/v1/admin/analytics/overview`
+- `GET /api/v1/admin/analytics/revenue`
+- `GET /api/v1/admin/analytics/tenants`
+- `GET /api/v1/admin/analytics/subscriptions`
+- `GET /api/v1/admin/analytics/reviews`
+- `GET /api/v1/admin/analytics/operations`
+
+统一返回 `{ ok, data, requestId }`。金额字段返回 `{ amountMinor, currency }`，避免前端自行猜测精度。时间范围最大 366 天，列表默认 100 条，平台排行榜默认 50 条，超出范围返回参数错误。
+
+### 7.5 权限与多租户边界
+
+- 租户报表要求 `analytics:read`，范围必须从 Session 的 `tenantId` 和 `workspaceId` 派生；客户端传入的范围只能校验，不能覆盖 Session。
+- Finance 可读取财务金额指标，但不读取不必要的客户敏感字段。
+- Owner/Admin 读取完整租户报表；Manager 读取运营指标；Viewer 只读且隐藏财务明细。
+- Super Admin 复用 `PLATFORM_ADMIN_TELEGRAM_IDS` 白名单；平台接口明确执行全平台只读聚合，并返回脱敏租户标识。
+- 平台接口记录管理员 user id、endpoint、时间范围、结果状态和 request id；统计读取不创建业务流水。
+
+### 7.6 数据库与性能策略
+
+第一阶段先使用 D1 实时聚合，必要索引以真实字段审计为前提：
+
+- `ad_orders(tenant_id, created_at, status)`
+- `ad_orders(tenant_id, channel_id, created_at)`
+- `financial_transactions(tenant_id, occurred_at, source_type, status)`
+- `ad_publish_logs(executed_at, result)`
+- `ad_publish_tasks(tenant_id, created_at, status)`
+- `subscription_checkout_requests(status, created_at)`
+- `tenant_subscriptions(status, current_period_end)`
+
+首版不直接引入快照表。若实时聚合在真实数据量下出现 D1 延迟或成本问题，再增加 `analytics_daily_snapshots` 与 `analytics_refresh_runs`：每日 Cron 生成前一天快照、使用幂等键、保留计算版本和源数据范围；当日继续实时查询，历史日期优先读取快照。
+
+### 7.7 前端 Dashboard 结构
+
+在现有占位导航基础上增加独立 `/analytics` 与 `/admin` 区域，不把平台数据混入普通租户首页。
+
+租户侧：时间范围与时区选择、KPI 卡片、收入趋势、订单漏斗、频道排行、发布成功率和异常任务。Super Admin 侧：经营总览、收入分析、租户增长、订阅组合、运营健康和审核中心。
+
+新增 `apps/web/src/lib/analytics-api.ts`，统一处理 Bearer Session、查询参数编码、AbortController、错误映射及 Loading / Empty / Forbidden / SchemaUnavailable / Error 状态。图表组件只接收后端聚合 DTO，不在 React 中计算收入口径；优先使用轻量 SVG/CSS，首版不为一个折线图引入大型图表依赖。
+
+视觉沿用当前 Soft Cloud Ledger：浅色工作台、深蓝文字、青绿色正常状态、橙色风险提示；顶部突出时间范围和数据新鲜度；每个图表显示口径、更新时间和数据范围。移动端优先保证 KPI、筛选和列表可用，复杂图表允许横向滚动。
+
+### 7.8 阶段拆分
+
+#### 15A：统计契约与只读仓储
+
+确定 DTO、时间范围、权限矩阵、金额格式、错误码和统计口径；实现本地 Schema analytics repository 与最小 API；补充 SQL 聚合和跨租户隔离测试。
+
+#### 15B：生产 Analytics Adapter
+
+基于生产只读审计结果实现 `production-analytics.ts`；对缺少订阅、退款、媒体或财务字段的指标返回明确状态；仅在 Schema 评审后添加生产索引或迁移。
+
+#### 15C：租户 Analytics 页面
+
+替换普通首页固定的“暂无数据”指标为真实 API；新增 `/analytics` 页面、筛选器、趋势、订单漏斗、频道排行和发布健康。
+
+#### 15D：Super Admin Dashboard
+
+新增平台管理员路由、平台聚合 API、审核积压、订阅收入、租户增长和运行健康模块；接入脱敏和只读审计。
+
+#### 15E：快照与导出评估
+
+根据真实查询耗时和数据量评估每日快照。CSV 导出作为后续功能，不放入首个可交付版本，避免绕过权限和大数据量下载风险。
+
+### 7.9 主要风险与首个交付标准
+
+- 收入重复计算：统一以确认流水为收入事实，订单金额只能作为应收指标。
+- 生产表差异：所有生产查询进入 adapter；缺表时返回可识别状态，禁止静默显示 0。
+- 时区边界：日期范围转换为 UTC 半开区间 `[from, to)`，SQL 使用 `>=` 与 `<`。
+- 指标漂移：DTO 固定定义版本，改变统计口径时增加版本说明。
+- 首个交付必须通过权限、跨租户隔离、金额来源、时间范围、空数据和 Schema 缺口测试；Dashboard 不使用固定演示数字。
+- 在生产订阅表、退款表和真实 Cloudflare D1 验证完成前，不开放生产 Super Admin 的缺失指标。

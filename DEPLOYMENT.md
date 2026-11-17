@@ -9,11 +9,11 @@
 
 ## 生产 contract
 
-生产 Wrangler 配置使用 `D1_SCHEMA_CONTRACT=production-0008`。在该 contract 下，认证、频道、CRM、套餐、订单、付款和 Webhook 去重会选择 `production-*.ts` adapter；发布 Cron 选择 `production-publishing.ts`。未设置该值时仍运行开发 schema，避免本地数据库被错误解释。
+生产 Wrangler 配置使用 `D1_SCHEMA_CONTRACT=production-0009`。在该 contract 下，认证、频道、CRM、套餐、订单、付款、媒体幂等和 Webhook 去重会选择 `production-*.ts` adapter；发布 Cron 选择 `production-publishing.ts`。未设置该值时仍运行开发 schema，避免本地数据库被错误解释。
 
 ## 当前阻塞
 
-生产素材表缺少 Telegram source message/chat 幂等字段，媒体 Webhook 写入和相册状态被显式阻止；生产库没有已确认的退款申请表，退款 API 被显式阻止；排期 HTTP API 还需完成生产 adapter 切换。不要在这些差异未评审前运行远程 Migration。
+生产库已补充 `creative_media.telegram_message_id/source_chat_id`、幂等索引、`media_groups` 和 `media_group_items`；退款申请表和订阅表仍未接入生产，因此退款/订阅商业接口继续安全阻止。
 
 ## 仍需用户确认后的生产操作
 

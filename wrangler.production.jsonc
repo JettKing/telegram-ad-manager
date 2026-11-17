@@ -6,7 +6,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
   "vars": {
-    "D1_SCHEMA_CONTRACT": "production-0008"
+    "D1_SCHEMA_CONTRACT": "production-0009"
   },
   "d1_databases": [
     {

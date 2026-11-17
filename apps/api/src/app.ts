@@ -53,7 +53,7 @@ function runtimeEnv(bindings: ApiBindings | undefined): ApiBindings {
   return { ...fallback, ...current, DATABASE_URL: current.DATABASE_URL ?? (current.DB ? "d1-binding" : fallback.DATABASE_URL) };
 }
 
-function productionContract(env: ApiBindings): boolean { return env.D1_SCHEMA_CONTRACT === "production-0008"; }
+function productionContract(env: ApiBindings): boolean { return env.D1_SCHEMA_CONTRACT === "production-0009"; }
 function provisionIdentity(db: D1Like, user: Parameters<typeof provisionTelegramIdentity>[1], env: ApiBindings) { return productionContract(env) ? provisionProductionTelegramIdentity(db, user) : provisionTelegramIdentity(db, user); }
 function issueSession(db: D1Like, identity: Awaited<ReturnType<typeof provisionTelegramIdentity>>, secret: string, ttl: number, env: ApiBindings) { return productionContract(env) ? issueProductionPlatformSession(db, identity, secret, ttl) : issuePlatformSession(db, identity, secret, ttl); }
 function readSession(db: D1Like, token: string | undefined, secret: string, env: ApiBindings) { return productionContract(env) ? readProductionPlatformSession(db, token, secret) : readPlatformSession(db, token, secret); }
