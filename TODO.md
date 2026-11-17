@@ -1,81 +1,38 @@
 # TG Ad Manager V1.1 任务清单
 
-## 阶段 1：工程基础（进行中）
+## 阶段 1：工程基础（已完成基线，D1 远端执行待配置）
 
 - [x] 初始化项目目录、TypeScript、Vite、Hono、共享契约和文档基线。
-  - 已完成：项目可以通过 pnpm 安装依赖；前端与 API 有明确包边界；项目文档记录真实状态。
 - [x] 建立 Cloudflare D1/SQLite 兼容 Migration 目录。
-  - 已完成：迁移文件采用编号顺序；核心用户、租户、工作空间、Telegram、CRM、套餐、订单、发布、订阅、审计和任务表已建立第一版结构。
 - [ ] 完成真实数据库迁移执行器并在目标 D1 上验证。
   - 条件：需要目标 Cloudflare D1 绑定和迁移执行权限；不得把静态 SQL 文件存在误称为已执行。
-- [x] 建立 `/health`、`/health/ready` 和 `/api/v1/health` 真实运行探针。
-  - 已完成：探针返回服务版本、运行时间、数据库/Telegram/R2 的可解释配置状态；可选 R2 未配置不阻断基础服务。
+- [x] 建立健康和就绪探针。
 - [x] 提供响应式 Mini App / Web 后台壳层与路由清单。
-  - 已完成：页面提供概览、工作空间、频道、客户、套餐、订单、排期、素材、发布任务和订阅入口；未接入模块明确显示待接入，而不是固定业务数据。
 
-## 阶段 2：身份与多租户（未开始）
+## 阶段 2：Telegram Bot 交互与认证集成（进行中）
 
-- [ ] 使用 Telegram Mini App `initData` 后端验签，校验时间、拒绝过期数据，不信任 `initDataUnsafe`。
-- [ ] 建立平台会话、Tenant、Workspace、Member、Role/Permission，并由后端强制租户隔离。
-- [ ] 覆盖 Owner/Admin/Manager/Editor/Finance/Viewer 权限与越权测试。
+- [x] 实现 Mini App `initData` 后端 HMAC-SHA256 验签：按字段排序构造 data-check-string，使用 `HMAC-SHA256(bot_token, "WebAppData")` 派生密钥，校验 `hash`，检查 `auth_date` 和未来时间偏移。
+- [x] 拒绝缺少 Token、缺少 hash/user、过期数据、伪造签名，并且只在签名通过后读取 Telegram 用户资料。
+- [x] 增加 replay key 与 D1 持久化接口；检测重复 raw initData，D1 不可用时 fail closed，不声称完成生产登录。
+- [x] 实现 `POST /api/v1/auth/telegram`，支持 JSON `initData` 或请求头传入原始 initData。
+- [x] 实现 `POST /webhooks/telegram`，验证 `X-Telegram-Bot-Api-Secret-Token`、解析 `update_id`、D1/内存去重和结构化错误响应。
+- [ ] 将认证用户 upsert 到 users，创建 platform session，并绑定默认 Tenant/Workspace。
+- [ ] 将 Webhook Update 入队，处理消息、媒体、频道事件并写入完整处理状态。
+- [ ] 配置真实 Token、Webhook Secret、公开 HTTPS URL 后执行 Telegram 外部联调；未配置前保持未验证。
 
-## 阶段 3：Bot 与频道绑定（未开始）
+## 阶段 3：频道绑定与权限检查（未开始）
 
-- [ ] 使用安全 Webhook Secret Token、验证请求头、记录 update 去重与处理状态。
 - [ ] 真实检查频道身份、发布/置顶/删除权限，支持多频道绑定、取消绑定和重新验证。
-- [ ] 完成测试 Bot/测试频道真实联调；未提供 Token 和管理员权限前保持未验证。
 
 ## 阶段 4：多媒体素材系统（未开始）
 
 - [ ] 支持文本、图片、视频、相册、GIF/Animation、Document 和合法组合。
 - [ ] 记录 `file_id`、`file_unique_id`、媒体元数据、`media_group_id`、Bot 身份和租户归属。
 - [ ] 用 collecting → settling → pending_confirmation → completed 状态机处理相册，允许迟到消息重新打开聚合。
-- [ ] 完成素材列表、预览、分类、搜索、删除、复用和失败提示。
 
-## 阶段 5：CRM 与广告套餐（未开始）
+## 阶段 5–12：业务、发布、订阅、财务与交付（未开始）
 
-- [ ] 真实创建、修改、查询、删除客户和自定义标签；保留客户备注、历史订单、累计金额和状态。
-- [ ] 真实创建、修改、启停广告套餐；区分展示时长、置顶时长、发布间隔、到期和删除规则。
-- [ ] 权益与套餐价格由后台数据配置，不写死在业务代码中。
-
-## 阶段 6：广告订单（未开始）
-
-- [ ] 支持人工创建订单、付款凭证、人工核账、广告审核、状态转换、取消、退款和历史修订。
-- [ ] 不允许通过任意数据库状态跳过业务流程；关键修改记录操作人、原因和前后摘要。
-- [ ] 完成一笔订单从创建到确认的真实业务闭环。
-
-## 阶段 7：编辑器与排期（未开始）
-
-- [ ] 支持媒体、caption、HTML/MarkdownV2、Inline Keyboard 和 Telegram 约束校验。
-- [ ] 提供文字、图片、视频、相册、按钮预览和可复用模板。
-- [ ] 支持单次/周期/多频道排期、暂停/修改/取消、日历视图和同频道冲突检查。
-
-## 阶段 8：自动发布（未开始）
-
-- [ ] 通过队列调用 `sendMessage`、`sendPhoto`、`sendVideo`、`sendMediaGroup`、`sendDocument`、`sendAnimation`。
-- [ ] 处理幂等、重复任务、429/retry_after、超时、权限失效、媒体无效和 file_id 不兼容。
-- [ ] 超时不得盲目重试；必须支持 uncertain 与人工核查，保存 Telegram Message ID 和完整发布日志。
-- [ ] 在测试频道完成图片、视频、相册和文本的真实发布验证。
-
-## 阶段 9：到期处理（未开始）
-
-- [ ] 独立处理取消置顶与删除消息，遵守 Telegram 当前 API 权限和时间限制。
-- [ ] 删除失败标记、保存错误、通知管理员并提供人工处理入口；不得承诺无限期删除。
-
-## 阶段 10：SaaS 订阅（未开始）
-
-- [ ] 实现 FREE/PRO/BUSINESS 租户订阅、月/年周期、权益额度、升级/降级、赠送、冻结和到期处理。
-- [ ] 会员到期或降级不得删除订单与财务数据；超额数据、只读访问和历史保留策略必须明确。
-
-## 阶段 11：财务与统计（未开始）
-
-- [ ] 区分广告收入、SaaS 收入、退款、优惠、人工调整和实际到账；纠错采用反向/调整流水。
-- [ ] 统计必须来自真实数据库，不把未付款订单计入实际收入；支持时间范围、频道维度和 CSV 导出。
-
-## 阶段 12：超级管理员与交付（未开始）
-
-- [ ] 实现租户、用户、工作空间、频道、订单、会员、财务、系统配置、违规处理、审计和任务监控。
-- [ ] 提供部署配置、Secrets 清单、D1/Queues/Cron/Webhook 步骤、备份恢复文档、测试报告和最终 ZIP。
+- [ ] 完成 CRM、套餐、订单、付款核账、编辑器、排期、真实发布、到期处理、SaaS 订阅、财务统计、管理员后台和最终交付。
 
 ## 真实验收边界
 

@@ -13,11 +13,11 @@ describe("foundation boundaries", () => {
     expect(telegramServiceState("  ")).toBe("not_configured");
   });
 
-  it("rejects missing initData before any user identity is trusted", () => {
-    expect(validateTelegramInitData(undefined, "token")).toEqual({ valid: false, reason: "missing" });
+  it("rejects missing initData before any user identity is trusted", async () => {
+    await expect(validateTelegramInitData(undefined, "token")).resolves.toEqual({ valid: false, reason: "missing" });
   });
 
-  it("rejects unsigned initData instead of trusting the user payload", () => {
-    expect(validateTelegramInitData(validShape, "token")).toEqual({ valid: false, reason: "invalid_signature" });
+  it("rejects unsigned initData instead of trusting the user payload", async () => {
+    await expect(validateTelegramInitData(validShape, "token")).resolves.toMatchObject({ valid: false, reason: "invalid_signature" });
   });
 });
