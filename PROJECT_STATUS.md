@@ -2,29 +2,33 @@
 
 ## 当前状态
 
-阶段 5 已完成多媒体素材接收和相册聚合代码基线，并通过本地门禁。Telegram Webhook 在完成 update 去重后，会识别消息中的文本、图片、视频、Animation/GIF 和 Document，按当前用户或已绑定频道解析 Tenant/Workspace，再写入 D1 媒体表。
+阶段 6 已完成 CRM、套餐、订单和内容编辑器的代码基线，并通过本地门禁。业务 API 复用当前 Session 的 Tenant/Workspace/RBAC，上游资源在写入订单前重新做归属检查，不依赖前端传入金额或租户标识。
 
-## 阶段 5 已实现
+## 阶段 6 已实现
 
-`apps/api/src/media.ts` 提供 Telegram Update 解析器。图片选择最大 PhotoSize，媒体记录保存 `file_id`、`file_unique_id`、文件名、MIME、大小、宽高、时长、caption 和来源消息。文本也作为 `media_type = text` 素材保存。`0007_media_ingestion.sql` 增加来源消息字段和唯一幂等索引。
+`apps/api/src/business.ts` 提供 CRM 客户校验、套餐参数校验、订单内容 JSON 校验、订单金额计算和订单状态迁移。客户支持联系人、Telegram 用户、来源、备注和状态；套餐支持广告类型、发布次数、展示/置顶/间隔、原价、折扣价、自动取消置顶、自动删除策略、启用和公开字段。
 
-相册使用 `media_group_id` 建立 `media_groups` 和 `media_group_items`。每个素材先进入 `collecting`，settle worker/API 把它推进到 `settling`，确认窗口完成后进入 `pending_confirmation`，人工或业务确认后进入 `completed`。完成后的迟到消息会重新进入 `collecting` 并增加版本；同一个 Bot、来源 chat 和 message 不能重复创建素材。跨 Tenant/Workspace 的相同消息或相册键会拒绝覆盖。
+订单创建必须通过当前 Tenant/Workspace 找到客户、启用套餐、active 频道和 ready 媒体素材。订单金额来自套餐折扣价或原价，折扣金额只允许为非负整数且不能超过套餐应收；订单内容支持文本、实体和最多 20 个去重素材引用。订单创建和内容更新都会写 `ad_order_revisions`，素材引用写入 `ad_order_media_refs`。
 
-新增接口：`GET /api/v1/media-assets`、`POST /api/v1/media-groups/:groupId/settle`、`POST /api/v1/media-groups/:groupId/pending-confirmation`、`POST /api/v1/media-groups/:groupId/confirm`。素材角色权限为 `media:read` 和 `media:write`。
+订单状态通过显式迁移矩阵约束。当前提供草稿、提交付款、读取、内容编辑和通用状态迁移 API；不会允许把 draft 直接改成 published，也不会在客户端提交金额后直接信任。
+
+## API
+
+CRM：`GET/POST/PATCH /api/v1/customers`。套餐：`GET/POST /api/v1/packages`。订单：`GET/POST /api/v1/orders`、`GET /api/v1/orders/:orderId`、`PATCH /api/v1/orders/:orderId/content`、`POST /api/v1/orders/:orderId/submit` 和 `POST /api/v1/orders/:orderId/transition`。
 
 ## 检查证据
 
-- `pnpm db:check`：通过，7 份 Migration 连续有效。
+- `pnpm db:check`：通过，8 份 Migration 连续有效。
 - `pnpm typecheck`：通过。
 - `pnpm lint`：通过。
-- `pnpm test`：通过，5 个测试文件，18 个测试。
+- `pnpm test`：通过，6 个测试文件，22 个测试。
 - `pnpm build`：通过。
-- 测试覆盖多媒体类型、最大图片选择、caption/album 字段、unsupported update 和相册状态转换。
+- 测试覆盖 CRM/套餐参数、编辑器去重和长度上限、订单状态迁移，以及全部前置阶段边界。
 
 ## 尚未完成
 
-尚未在真实 Cloudflare D1 和 Telegram Webhook 上联调。当前没有 Telegram 429/网络重试、真实 Cron settle worker、媒体下载到 R2、缩略图、病毒扫描、OCR、音频类型和媒体删除生命周期；这些不计入本阶段已完成项。
+尚未在真实 Cloudflare D1 上执行 Migration 和事务联调。付款凭证审核、订单审批 UI、金额/支付流水、财务审计、排期、发布队列、Telegram 发布结果和库存/配额限制仍未完成。当前阶段没有声称订单已经支付或发布。
 
 ## 下一步
 
-进入 CRM、套餐、订单和编辑器，先建立客户与订单的租户隔离，再把素材引用接入广告内容编辑和审批流。
+进入付款核账与排期发布：先增加付款凭证写入和 Finance 审核，再建立一次性/周期排期、幂等发布任务和 Telegram 发布结果记录。

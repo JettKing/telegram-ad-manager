@@ -6,6 +6,7 @@ import { telegramServiceState } from "@tg-ad-manager/telegram";
 import { hasPermission, issuePlatformSession, provisionTelegramIdentity, readPlatformSession, revokePlatformSession, type IdentityContext, type Permission } from "./identity.js";
 import { ChannelCheckError, D1ChannelRepository, TelegramBotApiClient, verifyTelegramChannel } from "./channels.js";
 import { D1MediaRepository } from "./media.js";
+import { BusinessValidationError, D1BusinessRepository, canTransitionOrder, parseCustomerInput, parsePackageInput, type OrderStatus } from "./business.js";
 
 export interface ApiBindings {
   DB?: D1Like;
@@ -110,7 +111,7 @@ app.get("/health/ready", (context) => {
 });
 
 app.get("/api/v1/health", (context) => context.json(success(healthPayload(runtimeEnv(context.env)), requestId(context))));
-app.get("/api/v1/metadata", (context) => context.json(success({ name: "TG Ad Manager", version, stage: "media-ingestion-album-aggregation", externalIntegrations: { telegram: telegramServiceState(runtimeEnv(context.env).TELEGRAM_BOT_TOKEN), cloudflareD1: runtimeEnv(context.env).DB ? "binding_present" : "not_configured" } }, requestId(context))));
+app.get("/api/v1/metadata", (context) => context.json(success({ name: "TG Ad Manager", version, stage: "crm-packages-orders-editor", externalIntegrations: { telegram: telegramServiceState(runtimeEnv(context.env).TELEGRAM_BOT_TOKEN), cloudflareD1: runtimeEnv(context.env).DB ? "binding_present" : "not_configured" } }, requestId(context))));
 
 app.post("/api/v1/auth/telegram", async (context) => {
   const env = runtimeEnv(context.env);
@@ -160,6 +161,152 @@ app.get("/api/v1/workspace/context", requireAuth("workspace:read"), (context) =>
 app.get("/api/v1/finance/access", requireAuth("finance:read"), (context) => {
   const auth = context.get("auth");
   return context.json(success({ authorized: true, tenantId: auth?.tenantId, role: auth?.role }, requestId(context)));
+});
+
+function businessError(context: { json: (body: unknown, status?: number) => Response }, error: unknown, requestIdValue?: string): Response {
+  if (error instanceof BusinessValidationError) {
+    const status = error.code.endsWith("_NOT_FOUND") || error.code === "ORDER_NOT_FOUND" ? 404 : error.code.includes("TRANSITION") || error.code.includes("LOCKED") ? 409 : 400;
+    return context.json(failure(error.code, error.message, requestIdValue), status);
+  }
+  console.error("business_api_error", { message: error instanceof Error ? error.message : "unknown" });
+  return context.json(failure("BUSINESS_OPERATION_FAILED", "业务操作失败", requestIdValue), 503);
+}
+
+app.get("/api/v1/customers", requireAuth("customer:read"), async (context) => {
+  const env = runtimeEnv(context.env);
+  const auth = context.get("auth");
+  if (!env.DB || !auth) return context.json(failure("CRM_NOT_CONFIGURED", "CRM 数据库上下文尚未配置", requestId(context)), 503);
+  return context.json(success({ customers: await new D1BusinessRepository(env.DB).listCustomers(auth.tenantId, auth.workspaceId) }, requestId(context)));
+});
+
+app.post("/api/v1/customers", requireAuth("customer:write"), async (context) => {
+  const env = runtimeEnv(context.env);
+  const auth = context.get("auth");
+  if (!env.DB || !auth) return context.json(failure("CRM_NOT_CONFIGURED", "CRM 数据库上下文尚未配置", requestId(context)), 503);
+  try {
+    const input = parseCustomerInput(await context.req.json());
+    const id = await new D1BusinessRepository(env.DB).createCustomer({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, input, new Date().toISOString());
+    return context.json(success({ customerId: id }, requestId(context)), 201);
+  } catch (error) {
+    return businessError(context, error, requestId(context));
+  }
+});
+
+app.patch("/api/v1/customers/:customerId", requireAuth("customer:write"), async (context) => {
+  const env = runtimeEnv(context.env);
+  const auth = context.get("auth");
+  if (!env.DB || !auth) return context.json(failure("CRM_NOT_CONFIGURED", "CRM 数据库上下文尚未配置", requestId(context)), 503);
+  try {
+    const input = parseCustomerInput(await context.req.json());
+    const updated = await new D1BusinessRepository(env.DB).updateCustomer({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, context.req.param("customerId"), input, new Date().toISOString());
+    if (!updated) return context.json(failure("CUSTOMER_NOT_FOUND", "客户不存在或不属于当前工作空间", requestId(context)), 404);
+    return context.json(success({ updated: true }, requestId(context)));
+  } catch (error) {
+    return businessError(context, error, requestId(context));
+  }
+});
+
+app.get("/api/v1/packages", requireAuth("order:read"), async (context) => {
+  const env = runtimeEnv(context.env);
+  const auth = context.get("auth");
+  if (!env.DB || !auth) return context.json(failure("PACKAGE_NOT_CONFIGURED", "套餐数据库上下文尚未配置", requestId(context)), 503);
+  return context.json(success({ packages: await new D1BusinessRepository(env.DB).listPackages(auth.tenantId, auth.workspaceId) }, requestId(context)));
+});
+
+app.post("/api/v1/packages", requireAuth("order:write"), async (context) => {
+  const env = runtimeEnv(context.env);
+  const auth = context.get("auth");
+  if (!env.DB || !auth) return context.json(failure("PACKAGE_NOT_CONFIGURED", "套餐数据库上下文尚未配置", requestId(context)), 503);
+  try {
+    const input = parsePackageInput(await context.req.json());
+    const id = await new D1BusinessRepository(env.DB).createPackage({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, input, new Date().toISOString());
+    return context.json(success({ packageId: id }, requestId(context)), 201);
+  } catch (error) {
+    return businessError(context, error, requestId(context));
+  }
+});
+
+app.patch("/api/v1/packages/:packageId", requireAuth("order:write"), async (context) => {
+  const env = runtimeEnv(context.env);
+  const auth = context.get("auth");
+  if (!env.DB || !auth) return context.json(failure("PACKAGE_NOT_CONFIGURED", "套餐数据库上下文尚未配置", requestId(context)), 503);
+  try {
+    const input = parsePackageInput(await context.req.json());
+    const updated = await new D1BusinessRepository(env.DB).updatePackage({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, context.req.param("packageId"), input, new Date().toISOString());
+    if (!updated) return context.json(failure("PACKAGE_NOT_FOUND", "套餐不存在或不属于当前工作空间", requestId(context)), 404);
+    return context.json(success({ updated: true }, requestId(context)));
+  } catch (error) {
+    return businessError(context, error, requestId(context));
+  }
+});
+
+app.get("/api/v1/orders", requireAuth("order:read"), async (context) => {
+  const env = runtimeEnv(context.env);
+  const auth = context.get("auth");
+  if (!env.DB || !auth) return context.json(failure("ORDER_NOT_CONFIGURED", "订单数据库上下文尚未配置", requestId(context)), 503);
+  return context.json(success({ orders: await new D1BusinessRepository(env.DB).listOrders(auth.tenantId, auth.workspaceId) }, requestId(context)));
+});
+
+app.post("/api/v1/orders", requireAuth("order:write"), async (context) => {
+  const env = runtimeEnv(context.env);
+  const auth = context.get("auth");
+  if (!env.DB || !auth) return context.json(failure("ORDER_NOT_CONFIGURED", "订单数据库上下文尚未配置", requestId(context)), 503);
+  try {
+    const body = await context.req.json() as Record<string, unknown>;
+    const result = await new D1BusinessRepository(env.DB).createOrder({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, { customerId: String(body.customerId ?? ""), channelId: String(body.channelId ?? ""), packageId: String(body.packageId ?? ""), discountMinor: body.discountMinor as number | undefined, content: body.content }, new Date().toISOString());
+    return context.json(success(result, requestId(context)), 201);
+  } catch (error) {
+    return businessError(context, error, requestId(context));
+  }
+});
+
+app.get("/api/v1/orders/:orderId", requireAuth("order:read"), async (context) => {
+  const env = runtimeEnv(context.env);
+  const auth = context.get("auth");
+  if (!env.DB || !auth) return context.json(failure("ORDER_NOT_CONFIGURED", "订单数据库上下文尚未配置", requestId(context)), 503);
+  const order = await new D1BusinessRepository(env.DB).getOrder({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, context.req.param("orderId"));
+  if (!order) return context.json(failure("ORDER_NOT_FOUND", "订单不存在或不属于当前工作空间", requestId(context)), 404);
+  return context.json(success({ order }, requestId(context)));
+});
+
+app.patch("/api/v1/orders/:orderId/content", requireAuth("order:write"), async (context) => {
+  const env = runtimeEnv(context.env);
+  const auth = context.get("auth");
+  if (!env.DB || !auth) return context.json(failure("ORDER_NOT_CONFIGURED", "订单数据库上下文尚未配置", requestId(context)), 503);
+  try {
+    const body = await context.req.json() as Record<string, unknown>;
+    const updated = await new D1BusinessRepository(env.DB).updateOrderContent({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("orderId"), body.content, typeof body.reason === "string" ? body.reason : "content_updated", new Date().toISOString());
+    return context.json(success({ updated }, requestId(context)));
+  } catch (error) {
+    return businessError(context, error, requestId(context));
+  }
+});
+
+app.post("/api/v1/orders/:orderId/submit", requireAuth("order:write"), async (context) => {
+  const env = runtimeEnv(context.env);
+  const auth = context.get("auth");
+  if (!env.DB || !auth) return context.json(failure("ORDER_NOT_CONFIGURED", "订单数据库上下文尚未配置", requestId(context)), 503);
+  try {
+    const updated = await new D1BusinessRepository(env.DB).transitionOrder({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("orderId"), "pending_payment", "submitted_for_payment", new Date().toISOString());
+    return context.json(success({ updated, status: "pending_payment" }, requestId(context)));
+  } catch (error) {
+    return businessError(context, error, requestId(context));
+  }
+});
+
+app.post("/api/v1/orders/:orderId/transition", requireAuth("order:write"), async (context) => {
+  const env = runtimeEnv(context.env);
+  const auth = context.get("auth");
+  if (!env.DB || !auth) return context.json(failure("ORDER_NOT_CONFIGURED", "订单数据库上下文尚未配置", requestId(context)), 503);
+  try {
+    const body = await context.req.json() as Record<string, unknown>;
+    const to = body.to;
+    if (typeof to !== "string" || !canTransitionOrder("draft", to as OrderStatus) && !["pending_payment", "paid", "pending_review", "approved", "scheduled", "publishing", "published", "completed", "cancelled", "refunded", "partially_refunded", "failed"].includes(to)) throw new BusinessValidationError("INVALID_ORDER_STATUS", "订单目标状态不合法");
+    const updated = await new D1BusinessRepository(env.DB).transitionOrder({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("orderId"), to as OrderStatus, typeof body.reason === "string" ? body.reason : "status_changed", new Date().toISOString());
+    return context.json(success({ updated, status: to }, requestId(context)));
+  } catch (error) {
+    return businessError(context, error, requestId(context));
+  }
 });
 
 function channelApiConfig(env: ApiBindings): { db: D1Like; botIdentityId: string; client: TelegramBotApiClient } | null {
