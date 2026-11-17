@@ -19,14 +19,6 @@
   "queues": {
     "producers": [
       { "binding": "PUBLISH_QUEUE", "queue": "tg-ad-manager-publish" }
-    ],
-    "consumers": [
-      {
-        "queue": "tg-ad-manager-publish",
-        "max_batch_size": 10,
-        "max_batch_timeout": 30,
-        "max_retries": 5
-      }
     ]
   },
   "triggers": { "crons": ["*/5 * * * *"] }
