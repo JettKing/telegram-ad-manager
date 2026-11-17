@@ -1,13 +1,19 @@
 # DEVELOPMENT_LOG
 
-## 2026-11-17 — 阶段 2 Telegram 认证与 Webhook（实现中）
+## 2026-11-17 — 阶段 3 用户、平台会话与 RBAC
 
-核对 Telegram 官方 Mini Apps、Bot API 和 Webhook 指南后，实现了真实的 Mini App initData HMAC-SHA256 校验。校验包含字段排序、`WebAppData` 派生密钥、hash 常量时间比较、auth_date 新鲜度、用户 JSON 解析和基于 raw initData hash 的 replay store。实现了 `/api/v1/auth/telegram`。
+实现 `apps/api/src/identity.ts`：Telegram 用户幂等 upsert；首次登录自动创建默认 Tenant、Workspace、Owner tenant member 和 workspace member；已有用户复用最早的 active 租户/工作空间。
 
-实现了 `/webhooks/telegram`，包括 `X-Telegram-Bot-Api-Secret-Token` 校验、Update 结构验证、`update_id` 去重、D1 持久化接口和开发内存实现。新增 `0004_telegram_security.sql` 保存 Webhook 日志与 initData replay 记录。
+平台会话使用随机 session id。数据库只保存 session 状态，返回值是 `base64url(session_id).HMAC-SHA256(SESSION_SECRET, session_id)`。每次受保护请求都重新校验签名，并查询用户状态、会话撤销时间、过期时间、Tenant Member 和 Workspace Member；退出登录写入 `revoked_at`。
 
-本阶段尚未完成用户 upsert、平台会话、Webhook 队列消费者，也尚未配置真实 Bot Token、Webhook Secret 和公开 HTTPS URL。门禁结果将在测试完成后更新。
+实现 Owner/Admin/Manager/Editor/Finance/Viewer 权限矩阵和后端 middleware，新增 `/api/v1/auth/me`、`/api/v1/auth/logout`、`/api/v1/workspace/context`、`/api/v1/finance/access`。新增 `0005_identity_sessions.sql` 查询索引。
+
+本阶段实际门禁：5 份 Migration 校验通过，typecheck/lint/build 通过，3 个测试文件的 10 个测试通过。真实 Cloudflare D1、Telegram 外部服务和生产并发行为仍未联调。
+
+## 2026-11-17 — 阶段 2 Telegram 认证与 Webhook
+
+实现 Mini App initData HMAC-SHA256、auth_date、replay 防护、Webhook Secret、Update 去重和 D1 记录。
 
 ## 2026-11-17 — 阶段 1 基线
 
-完成项目从空目录初始化；建立 React/Vite 前端与 Hono API 包边界、共享契约、D1/SQLite Migration、前端路由清单、移动端响应式工作台、健康探针、Workers 入口及基础文档。阶段 1 的 db:check、typecheck、lint、test、build 和 HTTP 探针检查均已通过。
+完成项目初始化、React/Vite 前端、Hono API、共享契约、Migration、路由清单、健康探针、Workers 入口和基础文档。

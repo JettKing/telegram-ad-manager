@@ -13,7 +13,7 @@ async function main() {
 
   for (const file of files) {
     const content = await readFile(join(migrationsDir, file), "utf8");
-    if (!content.includes("CREATE TABLE") && !content.includes("ALTER TABLE")) {
+    if (!/\b(CREATE|ALTER|DROP)\s+(TABLE|INDEX|VIEW|TRIGGER)\b/i.test(content)) {
       throw new Error(`${file} has no schema statement`);
     }
   }
