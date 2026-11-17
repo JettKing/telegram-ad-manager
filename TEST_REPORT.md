@@ -1,11 +1,11 @@
 # TEST_REPORT
 
-## 阶段 6 结果（2026-11-17）
+## 阶段 7 结果（2026-11-17）
 
-`pnpm db:check` 通过，8 份 Migration 编号连续；`pnpm typecheck`、`pnpm lint` 和 `pnpm build` 通过。`pnpm test` 通过 6 个测试文件、22 个测试。
+`pnpm db:check` 通过，9 份 Migration 编号连续；`pnpm typecheck`、`pnpm lint` 和 `pnpm build` 通过。新增付款和退款测试后，`pnpm test` 共通过 7 个测试文件、26 个测试。
 
-新增业务测试覆盖 CRM 字段和状态、套餐金额与折扣规则、编辑器文本长度和素材引用去重、订单生命周期迁移。既有 Telegram 认证、Webhook、频道权限、媒体解析、相册状态机、会话和 RBAC 测试继续通过。
+新增测试覆盖付款凭证字段、正整数金额、付款审核状态、退款理由和金额、退款审核状态。前置测试继续覆盖 Telegram 认证/Webhook、频道权限、媒体/相册、会话/RBAC、CRM/套餐/订单编辑器。
 
 ## 外部集成边界
 
-CRM、套餐、订单和编辑器使用 D1 repository 访问模式，但尚未在真实 Cloudflare D1 上执行 Migration 或事务并发验证。付款核账、真实订单支付状态、审批 UI、排期、队列发布、Telegram 发布结果和财务统计不计入本阶段通过项。
+当前付款凭证通过已有 media asset ID 引用，尚未接入 R2 上传、文件病毒扫描或支付渠道回调。Finance 审核和退款流水使用 D1 repository 访问模式，但尚未在真实 Cloudflare D1 上执行 Migration、事务并发和生产对账验证。

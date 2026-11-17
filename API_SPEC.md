@@ -4,36 +4,25 @@
 
 所有业务接口使用 `/api/v1` 前缀。成功响应形如 `{ "ok": true, "data": ... }`；失败响应形如 `{ "ok": false, "error": { "code", "message", "details?", "requestId?" } }`。所有受保护接口从 Bearer Session 解析 Tenant/Workspace，不接受客户端传入的 tenant_id 来扩大查询范围。
 
-## 当前已实现
+## 阶段 7 付款与退款
 
-| 方法 | 路径 | 说明 | 状态 |
+| 方法 | 路径 | 权限 | 说明 |
 |---|---|---|---|
-| GET | `/health` | 进程存活探针 | 已实现 |
-| GET | `/health/ready` | 必要依赖就绪探针 | 已实现 |
-| GET | `/api/v1/health` | 统一响应的运行状态 | 已实现 |
-| GET | `/api/v1/metadata` | 产品版本和外部集成配置状态 | 已实现 |
-| POST | `/api/v1/auth/telegram` | 验证 initData、upsert 用户、创建默认租户/工作空间并签发 session | 已实现 |
-| GET | `/api/v1/customers` | 当前 Tenant/Workspace CRM 客户列表 | 已实现 |
-| POST/PATCH | `/api/v1/customers`、`/api/v1/customers/:customerId` | 创建或编辑客户 | 已实现 |
-| GET/POST/PATCH | `/api/v1/packages`、`/api/v1/packages/:packageId` | 当前工作空间套餐列表、创建和编辑 | 已实现 |
-| GET/POST | `/api/v1/orders` | 当前工作空间订单列表和创建 | 已实现 |
-| GET | `/api/v1/orders/:orderId` | 读取租户隔离订单 | 已实现 |
-| PATCH | `/api/v1/orders/:orderId/content` | 编辑文本、实体和素材引用 | 已实现 |
-| POST | `/api/v1/orders/:orderId/submit` | `draft → pending_payment` | 已实现 |
-| POST | `/api/v1/orders/:orderId/transition` | 通过服务端状态矩阵迁移订单 | 已实现 |
-| GET | `/api/v1/media-assets` | 当前工作空间素材列表 | 已实现 |
-| POST | `/webhooks/telegram` | 验证 Webhook、去重并接收媒体 | 已实现 |
+| GET | `/api/v1/finance/payments/pending` | `finance:read` | Finance 待审核付款队列 |
+| GET | `/api/v1/orders/:orderId/payments` | `order:read` | 当前工作空间订单付款记录 |
+| POST | `/api/v1/orders/:orderId/payments` | `order:write` | 提交付款方式、金额、交易号和 `proofAssetId` |
+| POST | `/api/v1/finance/payments/:paymentId/review` | `finance:write` | 审核付款，`approved` 或 `rejected` |
+| GET | `/api/v1/finance/refunds/pending` | `finance:read` | Finance 待审核退款队列 |
+| GET | `/api/v1/orders/:orderId/refunds` | `order:read` | 当前工作空间退款流水 |
+| POST | `/api/v1/orders/:orderId/refunds` | `order:write` | 创建退款申请 |
+| POST | `/api/v1/finance/refunds/:refundId/review` | `finance:write` | 审核退款，`approved` 或 `rejected` |
 
-## CRM 与套餐
+付款提交结构为 `{ method, amountMinor, transactionRef?, proofAssetId? }`。`proofAssetId` 必须是当前工作空间 ready 的 photo、document 或 animation 素材；阶段 7 不直接声称完成文件上传或 R2 存储。服务端会累计当前订单 pending_review/approved 付款，阻止付款总额超过 receivable。
 
-客户写入使用 `customer:write`，读取使用 `customer:read`。套餐读取使用 `order:read`，创建使用 `order:write`。客户状态必须属于预定义集合；套餐金额使用整数 minor units，折扣价不能高于原价。
+付款审核保存 `reviewed_by`、`reviewed_at`、`review_note` 和 `paid_at`。全部 approved 金额达到订单应收时，订单 `payment_status` 变为 `paid`，并在允许的状态路径中进入 `paid`。
 
-## 订单与编辑器
+退款申请结构为 `{ amountMinor, reason, method?, transactionRef? }`。服务端按订单应收减去已批准退款计算可退款上限。Finance 批准后同步 `payment_status` 为 `partially_refunded` 或 `refunded`，并记录审核人、审核时间、备注和订单修订。
 
-创建订单需要 `{ customerId, channelId, packageId, discountMinor?, content: { text?, entities?, assetIds? } }`。服务端会重新查询客户、启用套餐、active 频道和 ready 素材，并按照套餐折扣价/原价计算 amount 和 receivable。`discountMinor` 只允许非负整数且不能超过 amount，客户端不能提交 amount 或 receivable 覆盖服务端计算。
+## 既有接口
 
-内容编辑最多 4096 个字符、20 个去重素材引用和 100 个实体项。草稿或待付款订单才允许编辑。订单状态使用服务端迁移矩阵；状态变化和内容变化写入 `ad_order_revisions`，素材引用写入 `ad_order_media_refs`。
-
-## 尚未开放的接口边界
-
-付款凭证、Finance 审核、退款流水、排期、发布任务、Telegram 发布、到期处理、订阅、统计和管理员接口仍按阶段清单逐步实现。
+CRM：`GET/POST/PATCH /api/v1/customers`。套餐：`GET/POST/PATCH /api/v1/packages`。订单：`GET/POST /api/v1/orders`、`GET /api/v1/orders/:orderId`、`PATCH /api/v1/orders/:orderId/content`、`POST /api/v1/orders/:orderId/submit`、`POST /api/v1/orders/:orderId/transition`。频道、媒体、Telegram auth 和 Webhook 仍按前置阶段契约提供。

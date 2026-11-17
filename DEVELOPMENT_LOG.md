@@ -1,21 +1,17 @@
 # DEVELOPMENT_LOG
 
+## 2026-11-17 — 阶段 7 付款凭证、Finance 审核与退款流水
+
+新增 `apps/api/src/payments.ts` 和 `0009_payments_refunds.sql`。付款凭证以已入库 media asset 作为 proofAssetId，提交时验证订单范围、素材范围、状态和未核销应收金额。Finance 审核记录审核人、时间、备注和 paid_at，并在全额核销后同步订单 payment_status/status。
+
+新增独立 `ad_order_refunds` 退款流水，支持申请理由、退款方式、交易号、待审核、通过和拒绝。退款金额以已批准退款累计值作为上限，Finance 批准后同步 partially_refunded/refunded，并写订单修订记录。新增付款和退款队列接口，权限分离为 order:write 与 finance:read/write。
+
+阶段测试新增后共 26 个通过测试；9 份 Migration、类型、Lint 和生产构建通过。真实 D1、R2、支付网关回调和财务生产对账仍未联调。
+
 ## 2026-11-17 — 阶段 6 CRM、套餐、订单与编辑器
 
-实现 `apps/api/src/business.ts` 和业务 API。CRM 支持客户创建、列表和编辑；套餐支持价格、折扣、发布次数、展示/置顶/间隔和自动处理策略；订单创建前严格验证客户、启用套餐、active 频道和 ready 素材均属于当前 Tenant/Workspace。
-
-订单金额由服务端根据套餐价计算，discount_minor 仅允许非负整数且不能超过 amount。订单内容编辑器限制文本、实体和素材引用数量；素材引用写入 `ad_order_media_refs`，订单创建、内容修改和状态变化写入 `ad_order_revisions`。状态迁移矩阵阻止 draft 直接发布。
-
-新增 `0008_business_editor.sql`，增加订单素材引用表和 CRM/套餐/修订查询索引。阶段门禁通过 8 份 Migration、22 个测试、类型、Lint 和生产构建。真实 D1、付款、排期和发布仍未联调。
+实现客户、套餐、订单、内容编辑器和素材引用。
 
 ## 2026-11-17 — 阶段 5 多媒体素材与相册聚合
 
 实现媒体解析、素材幂等和相册状态机。
-
-## 2026-11-17 — 阶段 4 频道绑定与 Telegram 权限检查
-
-实现频道身份、管理员权限快照、绑定、复核和软解绑。
-
-## 2026-11-17 — 阶段 3 用户、平台会话与 RBAC
-
-实现用户 upsert、默认租户/工作空间、可撤销 HMAC Bearer Session 和后端 RBAC middleware。
