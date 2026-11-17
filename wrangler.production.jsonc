@@ -1,0 +1,31 @@
+{
+  "name": "tg-ad-manager-api",
+  "account_id": "bf9869d76a7fcbd9f75aefc5f98f3fbb",
+  "main": "apps/api/src/worker.ts",
+  "compatibility_date": "2026-11-17",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "tg-ad-manager",
+      "database_id": "d9a4ad54-d504-40d6-abd5-a3e978a8ff5a",
+      "migrations_dir": "apps/api/migrations"
+    }
+  ],
+  "queues": {
+    "producers": [
+      { "binding": "PUBLISH_QUEUE", "queue": "tg-ad-manager-publish" }
+    ],
+    "consumers": [
+      {
+        "queue": "tg-ad-manager-publish",
+        "max_batch_size": 10,
+        "max_batch_timeout": 30,
+        "max_retries": 5,
+        "dead_letter_queue": "tg-ad-manager-publish-dlq"
+      }
+    ]
+  },
+  "triggers": { "crons": ["*/5 * * * *"] }
+}

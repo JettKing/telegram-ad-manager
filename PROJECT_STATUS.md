@@ -2,35 +2,24 @@
 
 ## 当前状态
 
-阶段 8 已完成排期、发布任务队列、Telegram 发布适配和到期处理的代码基线，并通过本地门禁。当前实现使用 D1 任务表作为队列存储，由 Workers scheduled handler 周期 claim 到期任务；没有声称已经配置 Cloudflare Queues 或真实 Cron。
+阶段 9 已开始，完成了真实 Cloudflare 资源的只读审计和部署前安全准备。当前没有执行任何生产写入或公开发布。
 
-## 已实现
+## Cloudflare 资源审计
 
-`apps/api/src/publishing.ts` 提供排期输入校验、D1 排期仓储、任务幂等 claim、任务 payload 装载、成功/失败日志、指数退避和到期任务查询。只有 approved 订单可以创建排期；排期会写 `ad_schedules`、`ad_publish_tasks`，任务 idempotency key 为 `schedule:<scheduleId>`。
+唯一授权账户：`bf9869d76a7fcbd9f75aefc5f98f3fbb`。
 
-`TelegramBotApiClient` 新增 sendMessage、sendPhoto、sendVideo、sendDocument、deleteMessage、pinChatMessage 和 unpinChatMessage。`TelegramPublisher` 根据订单内容和素材类型发布 Telegram 消息，保存最后一个成功 message_id；429 使用 Telegram `retry_after`，网络或服务错误使用指数退避，永久 API 错误不会无限重试。
+目标 D1：`tg-ad-manager`，ID `d9a4ad54-d504-40d6-abd5-a3e978a8ff5a`。目标 Queue：`tg-ad-manager-publish`，ID `9fc8423242564c1e814108cdf5883208`。目标账户尚无 `tg-ad-manager-api` Worker，Queue 当前无 producer/consumer。
 
-任务成功后订单进入 published，失败达到 max_attempts 后进入 failed 或 uncertain。到期处理查询已发布且 `planned_end_at <= now` 的订单，调用 Telegram deleteMessage；删除成功后订单进入 completed，并写发布日志。
+D1 不是空 schema：已有 `schema_migrations` 0001–0008 和生产表 `publish_tasks`、`publish_task_logs`、`ad_schedules`、`ad_creatives`、`creative_media`、`payment_submissions`。当前关键业务表行数为 0。
 
-Workers 入口新增 scheduled handler，调用 `processDuePublishTasks`，单次最多处理 10 个到期队列任务并处理到期删除。
+## 关键阻塞
 
-## API
+生产 D1 与当前仓库 Migration/代码不是同一 schema：生产发布表使用 `publish_tasks`，而仓库发布器使用 `ad_publish_tasks`；生产素材使用 `creative_media`，而仓库使用 `media_assets`；生产支付使用 `payment_submissions`，而仓库使用 `ad_order_payments`。生产排期使用 `start_at/end_at/timezone`，而仓库使用 `planned_at`。直接部署会造成 SQL 失败，不能以“业务数据为 0”作为跳过适配的理由。
 
-- `GET /api/v1/schedules`：读取当前工作空间排期。
-- `GET /api/v1/publish-tasks`：读取当前工作空间发布任务。
-- `POST /api/v1/orders/:orderId/schedules`：创建排期并入队。
+## 已完成准备
 
-排期读取使用 `publish:read`，排期创建使用 `publish:write`。所有业务查询按 Tenant/Workspace 过滤。
+新增 `wrangler.production.jsonc`，绑定真实 D1、Queue、账户和 5 分钟 Cron；新增 `pnpm cf:config:check`；新增 `PRODUCTION_INTEGRATION.md` 记录审计证据、部署顺序和阻塞项。没有写入 Token、Secret 或私密凭据。
 
-## 检查证据
+## 下一步
 
-- `pnpm db:check`：通过，10 份 Migration 连续有效。
-- `pnpm typecheck`：通过。
-- `pnpm lint`：通过。
-- `pnpm test`：通过，8 个测试文件、30 个测试。
-- `pnpm build`：通过。
-- 开发 API metadata 阶段为 `scheduling-publish-expiration`。
-
-## 尚未完成
-
-尚未执行真实 Cloudflare D1 Migration、Workers Cron、Queues、Telegram Bot 发布和 deleteMessage 外部联调。当前 claim 采用 D1 条件更新，真实并发、任务恢复和非幂等 Telegram 请求需要生产验证。多消息发布、pin/edit/delete 策略和媒体组原子发布仍需后续增强。
+先实现 production schema adapter 和 Queue consumer，再在明确确认后执行真实 D1 迁移、DLQ 创建、Worker 上传、Secret 写入、Cron 验证和 Telegram Webhook/频道/发布联调。

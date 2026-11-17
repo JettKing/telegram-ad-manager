@@ -1,62 +1,23 @@
 # TG Ad Manager V1.1 任务清单
 
-## 阶段 1：工程基础（已完成基线，D1 远端执行待配置）
+## 阶段 1–8：代码基线
 
-- [x] 初始化项目、TypeScript、Vite、Hono、共享契约和文档基线。
-- [x] 建立 D1/SQLite Migration 目录、健康探针和响应式工作台。
-- [ ] 执行目标 Cloudflare D1 远端 Migration 并保留结果证据。
+阶段 1–8 的认证、RBAC、频道、媒体、CRM、订单、付款、退款、排期和发布队列代码基线已完成；本地门禁通过，真实外部联调依赖生产配置。
 
-## 阶段 2：Telegram Bot 交互与认证集成（已完成代码基线，外部联调待配置）
+## 阶段 9：生产环境部署、Cloudflare 真实服务接入与联调
 
-- [x] Mini App `initData` HMAC-SHA256 验签、auth_date 新鲜度和 replay 防护。
-- [x] Telegram Webhook Secret、Update 解析和去重。
-- [ ] 配置真实 Token、Webhook Secret、公开 HTTPS URL 后执行外部联调。
+- [x] 只读盘点唯一授权 Cloudflare 账户、D1、Workers 和 Queues 资源。
+- [x] 确认目标 D1 `tg-ad-manager` 与目标 Queue `tg-ad-manager-publish` 的真实 ID、状态和现有 schema。
+- [x] 确认目标 D1 已有独立 0001–0008 production schema，且核心表当前没有业务数据。
+- [x] 创建真实资源绑定的 `wrangler.production.jsonc`，不包含 Secret。
+- [x] 增加 `pnpm cf:config:check`，阻止占位符和错误资源绑定进入部署流程。
+- [ ] 完成仓库代码到 production schema 的 adapter：`publish_tasks`、`publish_task_logs`、`creative_media`、`payment_submissions`、生产 `ad_schedules` 字段。
+- [ ] 补齐 Queue consumer、DLQ 策略和 queue_dispatched_at 状态闭环。
+- [ ] 通过 Cloudflare Secret 配置 Telegram Token、Webhook Secret、Session Secret 和 Bot identity。
+- [ ] 在明确确认后执行生产 D1 migration、创建 DLQ、上传 Worker、设置 Cron 和 Telegram Webhook。
+- [ ] 使用真实测试频道完成 auth、channel binding、media ingest、publish、429 retry、expiration delete 联调。
+- [ ] 保留每次生产操作的 Cloudflare 返回证据、Worker version、D1 migration 记录和 Telegram API 响应摘要。
 
-## 阶段 3：用户、平台会话与 RBAC（已完成代码基线，D1 远端执行待配置）
+## 生产安全边界
 
-- [x] 用户 upsert、默认 Tenant/Workspace、Owner 成员关系。
-- [x] 可撤销 HMAC Bearer Session 和后端 RBAC middleware。
-- [ ] 租户切换、成员邀请、角色变更、审计日志和资源级权限。
-
-## 阶段 4：频道绑定与 Telegram 权限检查（已完成代码基线，外部联调待配置）
-
-- [x] Bot API 频道身份、管理员状态和发布/编辑/删除权限检查。
-- [x] 频道列表、绑定、复核、软解绑 API，并按 Tenant/Workspace 隔离。
-- [ ] 配置真实 Bot Token、D1、Bot identity 和测试频道执行外部联调。
-
-## 阶段 5：多媒体素材与相册聚合（已完成代码基线，外部联调待配置）
-
-- [x] Webhook 解析 text、photo、video、animation/GIF、document 和 `channel_post`。
-- [x] 保存 Telegram 文件元数据并使用来源消息幂等键。
-- [x] 相册 `collecting → settling → pending_confirmation → completed` 状态机和迟到消息版本重开。
-- [ ] 配置真实 D1、Webhook 和测试消息，验证 Telegram 多媒体外部联调。
-
-## 阶段 6：CRM、套餐、订单和编辑器（已完成代码基线，D1 远端执行待配置）
-
-- [x] CRM、广告套餐、订单、编辑器、订单修订和素材引用。
-- [x] 订单创建前验证客户、套餐、active 频道和 ready 素材的 Tenant/Workspace 归属。
-- [ ] 真实 D1 事务、订单审批 UI、排期与发布队列联调。
-
-## 阶段 7：付款凭证、Finance 审核与退款流水（已完成代码基线，D1 远端执行待配置）
-
-- [x] 付款凭证引用、Finance 审核、付款状态同步、退款申请和退款审核。
-- [ ] 真实 D1 事务、支付渠道回调、文件上传/R2、生产财务对账和审计日志联调。
-
-## 阶段 8：排期、Telegram 发布队列与到期处理（已完成代码基线，外部 Telegram/D1 联调待配置）
-
-- [x] 排期类型和 plannedAt/plannedEndAt 校验，只有 approved 订单可以入排期。
-- [x] 创建排期时写入唯一发布任务，任务使用 `schedule:<scheduleId>` 幂等键。
-- [x] 队列 claim 使用 queued → processing 条件更新，避免同一任务被重复 claim。
-- [x] Telegram 发布支持 text、photo、video、document/animation，并保存成功 message_id。
-- [x] Telegram 429 使用 retry_after；网络/服务错误使用指数退避并受 max_attempts 限制。
-- [x] 发布成功同步订单为 published；失败最终状态为 failed/uncertain。
-- [x] Cron scheduled handler 执行到期任务，按 planned_end_at 删除已发布消息并同步 completed。
-- [ ] 真实 Cloudflare D1/Workers Cron、Telegram Bot 权限、Queues 和多消息/多媒体外部联调。
-
-## 后续阶段（未开始）
-
-- [ ] SaaS 订阅、财务统计、管理员后台、运营仪表盘和最终交付。
-
-## 真实验收边界
-
-凡依赖 Telegram Token、频道管理员权限、Cloudflare D1/Queues/R2 的项目，必须分开记录本地模拟测试、单元测试、集成测试和真实外部服务测试。未配置的外部验收项保持未完成。
+阶段 9 当前只执行了 Cloudflare 只读审计和本地配置准备，没有执行 D1 写入、migration、Worker 上传、Queue 创建、Secret 写入或 Webhook 切换。生产 D1 虽然当前业务数据为 0，仍不能跳过 schema 兼容性适配和变更确认。
