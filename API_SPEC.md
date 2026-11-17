@@ -2,7 +2,7 @@
 
 ## 统一约定
 
-所有业务接口使用 `/api/v1` 前缀。成功响应形如 `{ "ok": true, "data": ... }`；失败响应形如 `{ "ok": false, "error": { "code", "message", "details?", "requestId?" } }`。服务通过 `x-request-id` 传递追踪标识，不在日志中写入 Bot Token、Webhook Secret、Session Secret、付款凭证原文或完整 initData。
+所有业务接口使用 `/api/v1` 前缀。成功响应形如 `{ "ok": true, "data": ... }`；失败响应形如 `{ "ok": false, "error": { "code", "message", "details?", "requestId?" } }`。所有受保护接口从 Bearer Session 解析 Tenant/Workspace，不接受客户端传入的 tenant_id 来扩大查询范围。
 
 ## 当前已实现
 
@@ -16,17 +16,19 @@
 | GET | `/api/v1/auth/me` | 验证 Bearer Session 并返回当前身份上下文 | 已实现 |
 | POST | `/api/v1/auth/logout` | 撤销当前数据库会话 | 已实现 |
 | GET | `/api/v1/workspace/context` | `workspace:read` 权限保护的租户/工作空间上下文 | 已实现 |
-| GET | `/api/v1/finance/access` | `finance:read` 权限保护的访问边界，不返回虚构财务数字 | 已实现 |
+| GET | `/api/v1/finance/access` | `finance:read` 权限保护的访问边界 | 已实现 |
+| GET | `/api/v1/channels` | 当前 Tenant/Workspace 的频道列表 | 已实现 |
+| POST | `/api/v1/channels/bind` | 校验 getChat/getMe/getChatMember 并保存频道权限快照 | 已实现 |
+| POST | `/api/v1/channels/:channelId/recheck` | 重新读取 Telegram 身份与权限 | 已实现 |
+| POST | `/api/v1/channels/:channelId/unbind` | 当前 Tenant/Workspace 下软解绑频道 | 已实现 |
 | POST | `/webhooks/telegram` | 验证 Webhook Secret、解析 Update、去重并持久化 | 已实现 |
 
-## Session 约定
+## 频道绑定
 
-认证成功响应返回 `session.token` 和 `session.expiresAt`。客户端后续使用 `Authorization: Bearer <token>`。服务端用 `SESSION_SECRET` 对随机 session id 计算 HMAC 签名，并从 D1 查询 `user_sessions` 的 `revoked_at`、`expires_at`、用户状态、租户成员和工作空间成员。缺少 DB 或 `SESSION_SECRET` 时认证和受保护端点 fail closed，返回 503；错误或过期 Token 返回 401；角色没有所需权限返回 403。
+`POST /api/v1/channels/bind` 需要 `channel:manage`，接收 `{ "chatId": "@channel_username 或 chat_id" }`。服务端调用 Telegram `getChat`，要求 `type === "channel"`，随后调用 `getMe` 和 `getChatMember`。发布权限来自 `can_post_messages`，删除权限来自 `can_delete_messages`，频道编辑/置顶相关能力来自 `can_edit_messages`。缺少发布权限会保存记录但返回 422 和 `CHANNEL_PERMISSION_ERROR`。
 
-## RBAC 约定
-
-角色固定为 `owner`、`admin`、`manager`、`editor`、`finance`、`viewer`。权限由后端 `hasPermission` 判定，不能通过请求体、URL 参数或前端状态覆盖。Owner/Admin 可管理设置；Manager 可管理频道和发布；Finance 负责财务读取/写入；Viewer 只拥有读取权限。实际业务资源接入时还需要将 tenant_id/workspace_id 条件写入每条查询。
+频道查询、复核和解绑都加入 session 的 tenant_id/workspace_id 条件。频道绑定使用 bot_identity_id + telegram_chat_id 识别重复绑定，跨工作空间绑定返回冲突。
 
 ## 尚未开放的接口边界
 
-租户邀请/切换、成员角色变更、频道绑定、CRM、套餐、订单、素材、排期、发布任务、订阅、统计和管理员接口仍按阶段清单逐步实现。现有受保护接口是身份和权限边界，不代表这些业务模块已经完成。
+租户邀请/切换、成员角色变更、频道操作审计、CRM、套餐、订单、素材、排期、发布任务、订阅、统计和管理员接口仍按阶段清单逐步实现。

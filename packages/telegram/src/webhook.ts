@@ -7,6 +7,7 @@ export interface D1Like {
   prepare(query: string): {
     bind(...values: unknown[]): {
       first<T = unknown>(): Promise<T | null>;
+      all?<T = unknown>(): Promise<{ results: T[] }>;
       run(): Promise<{ meta?: { changes?: number } }>;
     };
   };

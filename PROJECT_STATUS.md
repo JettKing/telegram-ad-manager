@@ -2,29 +2,28 @@
 
 ## 当前状态
 
-阶段 3 已完成代码基线，并已通过本地门禁。Telegram 认证成功后，现在会幂等 upsert 用户，首次登录创建默认 Tenant/Workspace 和 Owner 成员关系，再签发数据库可撤销的 HMAC Bearer Session。所有需要用户身份的示例接口都通过服务端 session 和角色权限 middleware 保护。
+阶段 4 已完成频道绑定与权限检查代码基线，并已通过本地门禁。当前 API 能在已认证的 Tenant/Workspace 上下文中调用 Telegram Bot API，确认目标为 channel，读取 Bot 成员状态与权限，并保存权限快照。
 
-## 阶段 3 已实现
+## 阶段 4 已实现
 
-`apps/api/src/identity.ts` 包含用户 upsert、默认租户/工作空间 provision、会话签发、签名校验、过期查询和撤销。Token 只携带签名的 session id，真实身份和租户上下文从 `user_sessions`、`users`、`tenant_members`、`workspace_members` 查询，不信任客户端传入的 user/tenant/role。
+`apps/api/src/channels.ts` 提供 `TelegramBotApiClient`，支持 `getMe`、`getChat`、`getChatMember`，Telegram API 错误不会暴露 Token。`verifyTelegramChannel` 要求 `Chat.type === "channel"`，把 creator/administrator/member 状态映射为发布、编辑/置顶、删除权限。
 
-RBAC 角色包括 Owner、Admin、Manager、Editor、Finance、Viewer。`workspace:read`、`channel:manage`、`order:write`、`finance:read`、`publish:write`、`settings:write` 等权限由后端矩阵判定。当前提供 `GET /api/v1/auth/me`、`POST /api/v1/auth/logout`、`GET /api/v1/workspace/context` 和 `GET /api/v1/finance/access` 作为可验证的受保护 API 边界。
+`D1ChannelRepository` 按 tenant_id、workspace_id 查询频道，提供绑定、复核、列表和软解绑。绑定时使用 Bot identity 与 Telegram chat id 做唯一识别；如果频道属于其他工作空间会拒绝。权限不足仍保存快照并将状态设为 `permission_error`，不会返回可发布成功。
 
-`0005_identity_sessions.sql` 增加会话、活跃成员和工作空间成员查询索引。`.env.example` 已增加 `SESSION_SECRET`、`SESSION_TTL_SECONDS` 和 `TELEGRAM_BOT_IDENTITY_ID`。
+新增接口：`GET /api/v1/channels`、`POST /api/v1/channels/bind`、`POST /api/v1/channels/:channelId/recheck`、`POST /api/v1/channels/:channelId/unbind`。绑定和复核需要 `channel:manage`；列表需要 `channel:read`。
 
 ## 检查证据
 
-- `pnpm db:check`：通过，5 份 Migration 连续有效。
+- `pnpm db:check`：通过，6 份 Migration 连续有效。
 - `pnpm typecheck`：通过。
-- `pnpm lint`：通过。
-- `pnpm test`：通过，3 个测试文件，10 个测试。
+- `pnpm test`：通过，4 个测试文件，13 个测试。
 - `pnpm build`：通过。
-- RBAC 测试覆盖角色隔离；会话测试覆盖签发、错误密钥拒绝、读取和撤销。
+- 测试覆盖权限快照、非管理员 permission_error、Bot API 请求形状和已有阶段认证/RBAC/会话边界。
 
 ## 尚未完成
 
-尚未配置真实 Telegram Bot Token、Webhook Secret、公开 HTTPS URL、Cloudflare D1 远端迁移和真实外部联调。当前没有租户邀请/切换、成员角色变更、审计写入、业务资源级权限和真正会话清理 Cron。
+尚未配置真实 Telegram Bot Token、Bot identity、公开 HTTPS、Cloudflare D1 和测试频道管理员权限，因此没有声称真实频道绑定、getChatMember 或权限联调成功。当前还未实现频道切换历史、审计日志写入、队列发布和 Telegram 429/网络重试策略。
 
 ## 下一步
 
-进入频道绑定与权限检查：通过 Telegram Bot API `getChat`/`getChatMember` 真实验证频道身份和发布、置顶、删除权限，并把频道绑定和权限检查写入 tenant/workspace 上下文。
+进入多媒体素材系统：接收 Webhook 中的文本、图片、视频、相册、GIF/Animation 和 Document，记录 file_id/file_unique_id/media_group_id，并实现相册聚合状态机。
