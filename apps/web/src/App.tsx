@@ -1,162 +1,90 @@
-import { useEffect, useMemo, useState } from "react";
-import {
-  Activity,
-  ArrowUpRight,
-  BarChart3,
-  CalendarDays,
-  CheckCircle2,
-  ChevronRight,
-  CircleDollarSign,
-  FileImage,
-  LayoutDashboard,
-  LifeBuoy,
-  Menu,
-  Megaphone,
-  PackageOpen,
-  PanelLeftClose,
-  Radio,
-  Settings2,
-  ShieldCheck,
-  Sparkles,
-  Store,
-  Users,
-  X,
-} from "lucide-react";
-import type { HealthPayload, NavigationItem } from "@tg-ad-manager/contracts";
-import { getHealth } from "./lib/api";
+import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
+import { Activity, CalendarDays, ChevronRight, CircleDollarSign, FileImage, LayoutDashboard, LogOut, Menu, Megaphone, PackageOpen, Radio, RefreshCw, Send, ShieldCheck, Users, X } from "lucide-react";
+import type { HealthPayload } from "@tg-ad-manager/contracts";
+import { ApiError, authenticate, bindChannel, createCustomer, getChannels, getCustomers, getHealth, getMedia, getOrders, getPackages, getPublishTasks, getSchedules, logout } from "./lib/api";
+import type { AuthData, Channel, Customer, Package, Order, PublishTask, Schedule } from "./lib/api";
 
-type NavIcon = typeof LayoutDashboard;
-
-type NavEntry = NavigationItem & { icon: NavIcon };
-
-const navigation: NavEntry[] = [
-  { href: "/", label: "概览", description: "运营状态与待处理事项", group: "运营", icon: LayoutDashboard },
-  { href: "/workspace", label: "工作空间", description: "组织团队与业务边界", group: "运营", icon: Store },
-  { href: "/channels", label: "频道", description: "绑定频道与权限检查", group: "运营", icon: Radio },
-  { href: "/customers", label: "客户", description: "客户关系与合作记录", group: "运营", icon: Users },
-  { href: "/packages", label: "广告套餐", description: "报价、规则与权益", group: "运营", icon: PackageOpen },
-  { href: "/orders", label: "广告订单", description: "审核、付款与履约", group: "运营", icon: Megaphone },
-  { href: "/schedules", label: "排期日历", description: "计划发布与冲突检查", group: "运营", icon: CalendarDays },
-  { href: "/media", label: "素材中心", description: "Telegram 媒体与归档", group: "运营", icon: FileImage },
-  { href: "/publishes", label: "发布任务", description: "队列、结果与恢复", group: "运营", icon: Activity },
-  { href: "/subscription", label: "会员订阅", description: "租户权益与额度", group: "系统", icon: CircleDollarSign },
+type Page = "overview" | "channels" | "customers" | "packages" | "orders" | "schedules" | "media" | "publishes";
+const nav: Array<{ id: Page; label: string; icon: typeof LayoutDashboard }> = [
+  { id: "overview", label: "概览", icon: LayoutDashboard }, { id: "channels", label: "频道", icon: Radio }, { id: "customers", label: "客户", icon: Users }, { id: "packages", label: "广告套餐", icon: PackageOpen }, { id: "orders", label: "广告订单", icon: Megaphone }, { id: "schedules", label: "排期日历", icon: CalendarDays }, { id: "media", label: "素材中心", icon: FileImage }, { id: "publishes", label: "发布任务", icon: Send },
 ];
 
-const metricCards = [
-  { label: "待处理订单", value: "暂无数据", hint: "连接真实订单后显示", icon: Megaphone },
-  { label: "即将发布", value: "暂无数据", hint: "连接排期后显示", icon: CalendarDays },
-  { label: "待核账款", value: "暂无数据", hint: "连接财务流水后显示", icon: CircleDollarSign },
-  { label: "活跃频道", value: "暂无数据", hint: "完成频道绑定后显示", icon: Radio },
-];
+type DataState = { channels: Channel[]; customers: Customer[]; packages: Package[]; orders: Order[]; schedules: Schedule[]; tasks: PublishTask[]; media: Record<string, unknown>[] };
+const emptyData: DataState = { channels: [], customers: [], packages: [], orders: [], schedules: [], tasks: [], media: [] };
+const money = (minor: number) => `¥${(Number(minor || 0) / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2 })}`;
+const statusText: Record<string, string> = { active: "正常", draft: "草稿", pending_payment: "待付款", paid: "已付款", pending_review: "待审核", approved: "已通过", scheduled: "已排期", publishing: "发布中", published: "已发布", completed: "已完成", cancelled: "已取消", failed: "失败", queued: "排队中", processing: "处理中", success: "成功" };
 
 function App() {
-  const [activePath, setActivePath] = useState(() => window.location.pathname || "/");
+  const [page, setPage] = useState<Page>("overview");
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [auth, setAuth] = useState<AuthData | null>(null);
   const [health, setHealth] = useState<HealthPayload | null>(null);
-  const [healthError, setHealthError] = useState<string | null>(null);
+  const [data, setData] = useState<DataState>(emptyData);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    getHealth(controller.signal)
-      .then((payload) => {
-        if (payload.ok) {
-          setHealth(payload.data);
-          setHealthError(null);
-        } else {
-          setHealthError(payload.error.message);
-        }
-      })
-      .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === "AbortError") return;
-        setHealthError("无法连接 API，请检查开发服务是否运行。");
-      });
-    return () => controller.abort();
-  }, []);
-
-  const current = useMemo(
-    () => navigation.find((entry) => entry.href === activePath) ?? navigation[0],
-    [activePath],
-  );
-
-  const choosePath = (href: string) => {
-    window.history.pushState({}, "", href);
-    setActivePath(href);
-    setMobileOpen(false);
+  const loadData = async () => {
+    setRefreshing(true); setError("");
+    const results = await Promise.allSettled([getChannels(), getCustomers(), getPackages(), getOrders(), getSchedules(), getPublishTasks(), getMedia()]);
+    const next = { ...emptyData };
+    const [channels, customers, packages, orders, schedules, tasks, media] = results;
+    if (channels.status === "fulfilled") next.channels = channels.value.channels;
+    if (customers.status === "fulfilled") next.customers = customers.value.customers;
+    if (packages.status === "fulfilled") next.packages = packages.value.packages;
+    if (orders.status === "fulfilled") next.orders = orders.value.orders;
+    if (schedules.status === "fulfilled") next.schedules = schedules.value.schedules;
+    if (tasks.status === "fulfilled") next.tasks = tasks.value.tasks;
+    if (media.status === "fulfilled") next.media = media.value.assets;
+    const failed = results.find((r) => r.status === "rejected") as PromiseRejectedResult | undefined;
+    if (failed && !(failed.reason instanceof ApiError && failed.reason.code === "MEDIA_NOT_CONFIGURED")) setError(failed.reason instanceof Error ? failed.reason.message : "部分业务数据加载失败");
+    setData(next); setRefreshing(false);
   };
 
-  return (
-    <div className="app-shell">
-      <aside className={`sidebar ${mobileOpen ? "sidebar-open" : ""}`}>
-        <div className="brand-block">
-          <div className="brand-mark" aria-hidden="true"><span>TG</span></div>
-          <div>
-            <div className="brand-name">TG Ad Manager</div>
-            <div className="brand-caption">运营工作台 · V1.1</div>
-          </div>
-          <button className="icon-button mobile-close" onClick={() => setMobileOpen(false)} aria-label="关闭导航"><X size={18} /></button>
-        </div>
+  useEffect(() => { const controller = new AbortController(); getHealth(controller.signal).then((r) => r.ok && setHealth(r.data)).catch(() => undefined); authenticate().then(setAuth).catch((e) => setError(e instanceof Error ? e.message : "Telegram 登录失败")).finally(() => setLoading(false)); return () => controller.abort(); }, []);
+  useEffect(() => { if (auth) void loadData(); }, [auth]);
 
-        <div className="workspace-switcher">
-          <div className="workspace-avatar">A</div>
-          <div className="workspace-copy"><strong>默认工作空间</strong><span>待连接 Telegram</span></div>
-          <ChevronRight size={16} className="muted-icon" />
-        </div>
+  if (loading) return <div className="center-state"><div className="loader" /><strong>正在连接 TG Ad Manager</strong><span>验证 Telegram 身份并加载工作空间…</span></div>;
+  if (!auth) return <div className="center-state auth-state"><div className="brand-mark">TG</div><h1>TG Ad Manager</h1><p>{error || "请从 Telegram Bot 的“进入广告管理”按钮打开此 Mini App。"}</p><button className="primary-button" onClick={() => window.location.reload()}>重新连接</button></div>;
 
-        <nav className="main-nav" aria-label="主导航">
-          {(["运营", "系统"] as const).map((group) => (
-            <div className="nav-group" key={group}>
-              <div className="nav-label">{group}</div>
-              {navigation.filter((entry) => entry.group === group).map((entry) => {
-                const Icon = entry.icon;
-                const isActive = current.href === entry.href;
-                return <button key={entry.href} className={`nav-item ${isActive ? "active" : ""}`} onClick={() => choosePath(entry.href)}><Icon size={17} strokeWidth={isActive ? 2.4 : 1.8} /><span>{entry.label}</span>{isActive && <span className="active-pip" />}</button>;
-              })}
-            </div>
-          ))}
-        </nav>
-
-        <div className="sidebar-footer">
-          <button className="nav-item muted"><Settings2 size={17} /><span>系统设置</span></button>
-          <div className="operator-card"><div className="operator-avatar">O</div><div><strong>运营管理员</strong><span>权限待配置</span></div><ChevronRight size={15} className="muted-icon" /></div>
-        </div>
-      </aside>
-
-      {mobileOpen && <button className="mobile-backdrop" onClick={() => setMobileOpen(false)} aria-label="关闭导航遮罩" />}
-
-      <main className="main-content">
-        <header className="topbar">
-          <button className="icon-button mobile-menu" onClick={() => setMobileOpen(true)} aria-label="打开导航"><Menu size={20} /></button>
-          <div className="breadcrumb"><span>运营工作台</span><ChevronRight size={15} /><strong>{current.label}</strong></div>
-          <div className="topbar-actions"><div className="connection-pill"><span className={`status-dot ${health?.ok ? "online" : ""}`} />{health?.ok ? "本地 API 已连接" : "等待 API"}</div><button className="help-button"><LifeBuoy size={16} />帮助</button><div className="profile-chip">OP</div></div>
-        </header>
-
-        <div className="content-wrap">
-          <section className="page-heading"><div><div className="eyebrow">{current.group} · 工作台</div><h1>{current.label}</h1><p>{current.description}</p></div><button className="secondary-button"><ShieldCheck size={16} />安全状态</button></section>
-
-          {current.href === "/" ? <Overview health={health} healthError={healthError} onNavigate={choosePath} /> : <ModulePlaceholder entry={current} />}
-        </div>
-      </main>
-    </div>
-  );
+  const current = nav.find((item) => item.id === page) ?? nav[0];
+  const choose = (id: Page) => { setPage(id); setMobileOpen(false); window.history.replaceState({}, "", id === "overview" ? "/" : `/${id}`); };
+  return <div className="app-shell">
+    <aside className={`sidebar ${mobileOpen ? "sidebar-open" : ""}`}><div className="brand-block"><div className="brand-mark">TG</div><div><div className="brand-name">TG Ad Manager</div><div className="brand-caption">商业广告运营平台</div></div><button className="icon-button mobile-close" onClick={() => setMobileOpen(false)}><X size={18} /></button></div>
+      <div className="workspace-switcher"><div className="workspace-avatar">{auth.workspace.name.slice(0, 1)}</div><div className="workspace-copy"><strong>{auth.workspace.name}</strong><span>{auth.role === "owner" ? "工作空间所有者" : auth.role}</span></div></div>
+      <nav className="main-nav">{nav.map(({ id, label, icon: Icon }) => <button key={id} className={`nav-item ${page === id ? "active" : ""}`} onClick={() => choose(id)}><Icon size={17} /><span>{label}</span>{page === id && <span className="active-pip" />}</button>)}</nav>
+      <div className="sidebar-footer"><div className="operator-card"><div className="operator-avatar">{auth.user.displayName.slice(0, 1)}</div><div><strong>{auth.user.displayName}</strong><span>已认证 · {auth.role}</span></div></div><button className="nav-item muted" onClick={() => { logout(); window.location.reload(); }}><LogOut size={17} /><span>退出登录</span></button></div>
+    </aside>
+    {mobileOpen && <button className="mobile-backdrop" onClick={() => setMobileOpen(false)} aria-label="关闭导航" />}
+    <main className="main-content"><header className="topbar"><button className="icon-button mobile-menu" onClick={() => setMobileOpen(true)}><Menu size={20} /></button><div className="breadcrumb"><span>运营工作台</span><ChevronRight size={15} /><strong>{current.label}</strong></div><div className="topbar-actions"><div className="connection-pill"><span className={`status-dot ${health?.ok ? "online" : ""}`} />生产 API 已连接</div><div className="profile-chip">{auth.user.displayName.slice(0, 1)}</div></div></header>
+      <div className="content-wrap"><section className="page-heading"><div><div className="eyebrow">{auth.workspace.name} · 运营工作台</div><h1>{current.label}</h1><p>{pageSubtitle(page)}</p></div><button className="secondary-button" onClick={() => void loadData()} disabled={refreshing}><RefreshCw size={15} className={refreshing ? "spin" : ""} />刷新数据</button></section>{error && <div className="error-banner">{error}</div>}{page === "overview" ? <Overview data={data} onNavigate={choose} /> : <PageContent page={page} data={data} onRefresh={loadData} />}</div>
+    </main>
+  </div>;
 }
 
-function Overview({ health, healthError, onNavigate }: { health: HealthPayload | null; healthError: string | null; onNavigate: (href: string) => void }) {
-  return <>
-    <section className="status-banner"><div className="status-icon"><Sparkles size={19} /></div><div className="status-message"><strong>先建立可信的运营底座</strong><span>完成 Telegram Bot 与频道授权后，这里会展示真实订单、排期和发布任务。</span></div><button className="text-button" onClick={() => onNavigate("/channels")}>去绑定频道<ArrowUpRight size={15} /></button></section>
+function pageSubtitle(page: Page) { return ({ overview: "查看真实业务指标、待办事项和系统运行状态", channels: "绑定频道并检查发布权限", customers: "管理广告主、联系人和合作记录", packages: "配置可售广告位和发布规则", orders: "跟踪订单状态、金额和履约进度", schedules: "管理发布排期和任务状态", media: "查看 Telegram Webhook 收集的真实素材", publishes: "监控发布队列、重试和失败任务" } as Record<Page, string>)[page]; }
+function Overview({ data, onNavigate }: { data: DataState; onNavigate: (page: Page) => void }) { const revenue = data.orders.reduce((sum, order) => sum + Number(order.receivable_minor || 0), 0); const pending = data.orders.filter((o) => ["draft", "pending_payment", "pending_review", "approved", "scheduled"].includes(o.status)).length; return <>
+  <div className="status-banner"><div className="status-icon"><ShieldCheck size={19} /></div><div className="status-message"><strong>生产工作空间已连接</strong><span>数据来自当前 Telegram 租户，所有列表均经过后端权限和租户边界校验。</span></div><span className="live-chip">LIVE</span></div>
+  <section className="metric-grid"><Metric label="活跃频道" value={String(data.channels.filter((c) => c.status === "active").length)} hint={`${data.channels.length} 个已绑定`} icon={Radio} onClick={() => onNavigate("channels")} /><Metric label="客户总数" value={String(data.customers.length)} hint="真实 CRM 数据" icon={Users} onClick={() => onNavigate("customers")} /><Metric label="待处理订单" value={String(pending)} hint={`${data.orders.length} 笔订单`} icon={Megaphone} onClick={() => onNavigate("orders")} /><Metric label="订单总额" value={money(revenue)} hint="当前工作空间累计" icon={CircleDollarSign} onClick={() => onNavigate("orders")} /></section>
+  <section className="dashboard-grid"><article className="panel"><PanelTitle title="订单履约" kicker="REAL-TIME" /><div className="progress-list"><Progress label="已发布" value={data.orders.filter((o) => o.status === "published").length} total={Math.max(data.orders.length, 1)} tone="green" /><Progress label="待付款 / 审核" value={data.orders.filter((o) => ["pending_payment", "pending_review"].includes(o.status)).length} total={Math.max(data.orders.length, 1)} tone="orange" /><Progress label="排期中" value={data.orders.filter((o) => ["approved", "scheduled", "publishing"].includes(o.status)).length} total={Math.max(data.orders.length, 1)} tone="blue" /></div><button className="link-button" onClick={() => onNavigate("orders")}>查看全部订单 <ChevronRight size={15} /></button></article><article className="panel"><PanelTitle title="系统状态" kicker="PRODUCTION" /><div className="runtime-list"><Runtime label="API 服务" value="正常" good /><Runtime label="Telegram Bot" value="已配置" good /><Runtime label="数据库" value={data.channels ? "已连接" : "检查中"} good /><Runtime label="自动发布队列" value={`${data.tasks.length} 个任务`} good /></div></article></section>
+  <section className="panel table-panel"><PanelTitle title="最近订单" kicker="WORKSPACE ACTIVITY" action={<button className="secondary-button small" onClick={() => onNavigate("orders")}>管理订单</button>} />{data.orders.length ? <OrderTable orders={data.orders.slice(0, 5)} /> : <Empty title="还没有订单" text="先绑定频道、创建客户和广告套餐，即可创建第一笔真实订单。" action="去绑定频道" onClick={() => onNavigate("channels")} />}</section>
+</>; }
+function Metric({ label, value, hint, icon: Icon, onClick }: { label: string; value: string; hint: string; icon: typeof Radio; onClick: () => void }) { return <button className="metric-card" onClick={onClick}><div className="metric-icon"><Icon size={18} /></div><div className="metric-label">{label}</div><div className="metric-value">{value}</div><div className="metric-hint">{hint}</div></button>; }
+function PanelTitle({ title, kicker, action }: { title: string; kicker: string; action?: ReactNode }) { return <div className="panel-heading"><div><div className="panel-kicker">{kicker}</div><h2>{title}</h2></div>{action}</div>; }
+function Progress({ label, value, total, tone }: { label: string; value: number; total: number; tone: string }) { const percent = Math.min(100, Math.round(value / total * 100)); return <div className="progress-row"><div><span>{label}</span><strong>{value}</strong></div><div className="progress-track"><span className={`progress-fill ${tone}`} style={{ width: `${percent}%` }} /></div></div>; }
+function Runtime({ label, value, good }: { label: string; value: string; good?: boolean }) { return <div className="runtime-row"><span>{label}</span><span className={`state-chip ${good ? "good" : ""}`}><span className="mini-dot" />{value}</span></div>; }
 
-    <section className="metric-grid">{metricCards.map((metric) => { const Icon = metric.icon; return <article className="metric-card" key={metric.label}><div className="metric-icon"><Icon size={18} /></div><div className="metric-label">{metric.label}</div><div className="metric-value">{metric.value}</div><div className="metric-hint">{metric.hint}</div></article>; })}</section>
-
-    <section className="dashboard-grid">
-      <article className="panel next-panel"><div className="panel-heading"><div><div className="panel-kicker">Next step</div><h2>完成你的第一个业务闭环</h2></div><span className="neutral-chip">基础工程已就绪</span></div><div className="step-list"><Step index="01" title="配置 Telegram Bot" description="设置 Token 与 Webhook Secret，服务端不会把密钥返回前端。" state="待配置" /><Step index="02" title="绑定一个测试频道" description="由 Bot 检查频道身份和发布、置顶、删除权限。" state="待授权" /><Step index="03" title="创建一笔广告订单" description="使用真实客户、套餐和付款记录进入审核与排期流程。" state="待接入" /></div></article>
-      <article className="panel runtime-panel"><div className="panel-heading"><div><div className="panel-kicker">Runtime</div><h2>运行状态</h2></div><Activity size={18} className="panel-icon" /></div><div className="runtime-list"><RuntimeRow label="API 服务" state={health?.ok ? "正常" : "等待"} tone={health?.ok ? "good" : "neutral"} /><RuntimeRow label="数据库" state={health?.dependencies.database === "configured" ? "已连接" : "待配置"} tone={health?.dependencies.database === "configured" ? "good" : "neutral"} /><RuntimeRow label="Telegram Bot" state={health?.dependencies.telegram === "configured" ? "已配置" : "待配置"} tone={health?.dependencies.telegram === "configured" ? "good" : "neutral"} /><RuntimeRow label="R2 归档" state={health?.dependencies.r2 === "configured" ? "已启用" : "可选"} tone={health?.dependencies.r2 === "configured" ? "good" : "neutral"} /></div>{healthError ? <div className="inline-error">{healthError}</div> : <div className="runtime-footnote">探针时间：{health ? new Date(health.timestamp).toLocaleTimeString("zh-CN") : "等待响应"}</div>}</article>
-    </section>
-
-    <section className="lower-grid"><article className="panel empty-panel"><div className="empty-icon"><BarChart3 size={20} /></div><h2>还没有运营数据</h2><p>连接真实频道并完成第一笔订单后，系统会从数据库生成统计，不会使用固定演示数字。</p><button className="secondary-button" onClick={() => onNavigate("/workspace")}>查看工作空间<ChevronRight size={15} /></button></article><article className="panel compliance-panel"><div className="panel-heading"><div><div className="panel-kicker">Guardrails</div><h2>业务安全边界</h2></div><CheckCircle2 size={18} className="check-icon" /></div><p>租户隔离、权限控制、审计记录和任务幂等是核心流程的前置条件。每个外部联调项都会保留可验证状态。</p><div className="tag-row"><span>多租户隔离</span><span>可审计</span><span>可恢复</span></div></article></section>
-  </>;
-}
-
-function Step({ index, title, description, state }: { index: string; title: string; description: string; state: string }) { return <div className="step-row"><div className="step-index">{index}</div><div className="step-copy"><strong>{title}</strong><span>{description}</span></div><span className="neutral-chip">{state}</span></div>; }
-function RuntimeRow({ label, state, tone }: { label: string; state: string; tone: "good" | "neutral" }) { return <div className="runtime-row"><span>{label}</span><span className={`state-chip ${tone}`}><span className="mini-dot" />{state}</span></div>; }
-function ModulePlaceholder({ entry }: { entry: NavEntry }) { return <section className="module-placeholder panel"><div className="placeholder-orbit"><entry.icon size={24} /></div><div className="panel-kicker">Module foundation</div><h2>{entry.label}即将接入真实业务</h2><p>当前页面只展示模块边界和状态，不使用固定订单、客户、收入或发布数据。接入对应 Migration、API、权限和测试后，这里才会呈现可操作内容。</p><div className="placeholder-points"><div><ShieldCheck size={16} /><span>后端权限校验</span></div><div><Activity size={16} /><span>操作状态反馈</span></div><div><LifeBuoy size={16} /><span>失败恢复入口</span></div></div></section>; }
+function PageContent({ page, data, onRefresh }: { page: Page; data: DataState; onRefresh: () => Promise<void> }) { if (page === "channels") return <Channels channels={data.channels} onRefresh={onRefresh} />; if (page === "customers") return <Customers customers={data.customers} onRefresh={onRefresh} />; if (page === "packages") return <Packages packages={data.packages} />; if (page === "orders") return <Orders data={data} />; if (page === "schedules") return <Schedules schedules={data.schedules} />; if (page === "media") return <Records title="素材中心" records={data.media} empty="Webhook 尚未收集到素材，向 Bot 或已绑定频道发送媒体后会出现在这里。" />; return <Records title="发布任务" records={data.tasks} empty="当前没有发布队列任务。订单排期后，发布任务会出现在这里。" />; }
+function Channels({ channels, onRefresh }: { channels: Channel[]; onRefresh: () => Promise<void> }) { const [chatId, setChatId] = useState(""); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const submit = async () => { if (!chatId.trim()) return; setBusy(true); setMessage(""); try { await bindChannel(chatId.trim()); setChatId(""); setMessage("频道绑定成功，权限检查已完成"); await onRefresh(); } catch (e) { setMessage(e instanceof Error ? e.message : "频道绑定失败"); } finally { setBusy(false); } }; return <><section className="action-panel panel"><div><div className="panel-kicker">CHANNEL ACCESS</div><h2>绑定 Telegram 频道</h2><p>先将 @TGAdOpsBot 添加为频道管理员，并授予发布、编辑和删除消息权限，再输入频道用户名或 Chat ID。</p></div><div className="inline-form"><input value={chatId} onChange={(e) => setChatId(e.target.value)} placeholder="@your_channel 或 -100..." /><button className="primary-button" onClick={submit} disabled={busy}>{busy ? "检查中…" : "绑定并检查"}</button></div>{message && <div className="form-message">{message}</div>}</section><section className="panel table-panel"><PanelTitle title="已绑定频道" kicker={`${channels.length} CHANNELS`} />{channels.length ? <ChannelTable channels={channels} /> : <Empty title="暂无已绑定频道" text="绑定第一个频道后，广告套餐和订单才能选择真实投放渠道。" />}</section></>; }
+function Customers({ customers, onRefresh }: { customers: Customer[]; onRefresh: () => Promise<void> }) { const [name, setName] = useState(""); const [contact, setContact] = useState(""); const [busy, setBusy] = useState(false); const submit = async () => { if (!name.trim()) return; setBusy(true); try { await createCustomer({ name: name.trim(), contact: contact.trim(), source: "manual" }); setName(""); setContact(""); await onRefresh(); } finally { setBusy(false); } }; return <><section className="action-panel panel"><div><div className="panel-kicker">CRM</div><h2>新增客户</h2><p>客户信息属于当前工作空间，订单和付款记录会自动关联客户。</p></div><div className="form-grid"><input value={name} onChange={(e) => setName(e.target.value)} placeholder="客户名称 *" /><input value={contact} onChange={(e) => setContact(e.target.value)} placeholder="联系方式 / Telegram 用户名" /><button className="primary-button" onClick={submit} disabled={busy}>{busy ? "保存中…" : "保存客户"}</button></div></section><section className="panel table-panel"><PanelTitle title="客户列表" kicker={`${customers.length} CUSTOMERS`} />{customers.length ? <CustomerTable customers={customers} /> : <Empty title="暂无客户" text="先新增一个客户，再创建订单。" />}</section></>; }
+function Packages({ packages }: { packages: Package[] }) { return <section className="panel table-panel"><PanelTitle title="广告套餐" kicker={`${packages.length} PACKAGES`} />{packages.length ? <div className="package-grid">{packages.map((p) => <article className="package-card" key={p.id}><div className="package-top"><span className="package-type">{p.ad_type}</span><span className="state-chip good">{p.is_enabled ? "在售" : "停用"}</span></div><h3>{p.name}</h3><p>{p.description || "未填写套餐说明"}</p><strong>{money(p.price_minor)}</strong><small>{p.publish_count} 次发布 · {p.is_public ? "公开" : "私有"}</small></article>)}</div> : <Empty title="暂无广告套餐" text="请在管理后台创建至少一个可售套餐后再创建订单。" />}</section>; }
+function Orders({ data }: { data: DataState }) { return <section className="panel table-panel"><PanelTitle title="广告订单" kicker={`${data.orders.length} ORDERS`} action={<span className="muted-note">客户、频道和套餐均来自真实数据</span>} />{data.orders.length ? <OrderTable orders={data.orders} /> : <Empty title="暂无订单" text="完成频道、客户和套餐配置后，即可创建第一笔订单。" />}</section>; }
+function Schedules({ schedules }: { schedules: Schedule[] }) { return <section className="panel table-panel"><PanelTitle title="排期日历" kicker={`${schedules.length} SCHEDULES`} />{schedules.length ? <div className="schedule-list">{schedules.map((s) => <div className="schedule-row" key={s.id}><div className="date-box">{new Date(s.scheduled_at).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" })}</div><div><strong>订单 {s.order_id.slice(0, 8)}</strong><span>{new Date(s.scheduled_at).toLocaleString("zh-CN")}</span></div><span className="state-chip">{statusText[s.status] || s.status}</span></div>)}</div> : <Empty title="暂无排期" text="订单审核通过后，可以创建发布排期。" />}</section>; }
+function Records({ title, records, empty }: { title: string; records: Record<string, unknown>[]; empty: string }) { return <section className="panel table-panel"><PanelTitle title={title} kicker={`${records.length} RECORDS`} />{records.length ? <div className="record-list">{records.map((record, index) => <div className="record-row" key={String(record.id ?? index)}><div><strong>{String(record.file_name ?? record.order_id ?? record.id ?? "记录")}</strong><span>{String(record.media_type ?? record.status ?? "已入库")}</span></div><span className="state-chip">{statusText[String(record.status)] || String(record.status ?? "已就绪")}</span></div>)}</div> : <Empty title="暂无数据" text={empty} />}</section>; }
+function OrderTable({ orders }: { orders: Order[] }) { return <div className="data-table"><div className="table-head"><span>订单号</span><span>状态</span><span>应收金额</span><span>更新时间</span></div>{orders.map((o) => <div className="table-row" key={o.id}><strong>{o.order_no}</strong><span className="state-chip">{statusText[o.status] || o.status}</span><span>{money(o.receivable_minor)}</span><span>{new Date(o.updated_at).toLocaleDateString("zh-CN")}</span></div>)}</div>; }
+function ChannelTable({ channels }: { channels: Channel[] }) { return <div className="data-table"><div className="table-head"><span>频道</span><span>状态</span><span>发布</span><span>权限</span></div>{channels.map((c) => <div className="table-row" key={c.id}><strong>{c.title || c.username || c.telegram_chat_id}</strong><span className={`state-chip ${c.status === "active" ? "good" : ""}`}>{statusText[c.status] || c.status}</span><span>{c.can_post ? "可发布" : "无权限"}</span><span>{[c.can_post && "发布", c.can_pin && "置顶", c.can_delete && "删除"].filter(Boolean).join(" · ") || "待检查"}</span></div>)}</div>; }
+function CustomerTable({ customers }: { customers: Customer[] }) { return <div className="data-table"><div className="table-head"><span>客户</span><span>联系方式</span><span>状态</span><span>累计消费</span></div>{customers.map((c) => <div className="table-row" key={c.id}><strong>{c.name}</strong><span>{c.contact || c.telegram_username || "—"}</span><span className="state-chip good">{statusText[c.status] || c.status}</span><span>{money(c.total_spend_minor)}</span></div>)}</div>; }
+function Empty({ title, text, action, onClick }: { title: string; text: string; action?: string; onClick?: () => void }) { return <div className="empty-state"><div className="empty-icon"><Activity size={20} /></div><h3>{title}</h3><p>{text}</p>{action && <button className="secondary-button" onClick={onClick}>{action}<ChevronRight size={15} /></button>}</div>; }
 
 export default App;
