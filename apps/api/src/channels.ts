@@ -42,6 +42,7 @@ export interface TelegramBotApi {
   getMe(): Promise<TelegramUser>;
   getChat(chatId: string): Promise<TelegramChat>;
   getChatMember(chatId: string, userId: number): Promise<TelegramChatMember>;
+  sendMessage(chatId: string, text: string, options?: { reply_markup?: Record<string, unknown> }): Promise<{ message_id: number }>;
 }
 
 export class TelegramBotApiClient implements TelegramBotApi {
@@ -78,8 +79,8 @@ export class TelegramBotApiClient implements TelegramBotApi {
     return this.call<TelegramChatMember>("getChatMember", { chat_id: chatId, user_id: userId });
   }
 
-  sendMessage(chatId: string, text: string): Promise<{ message_id: number }> {
-    return this.call("sendMessage", { chat_id: chatId, text });
+  sendMessage(chatId: string, text: string, options?: { reply_markup?: Record<string, unknown> }): Promise<{ message_id: number }> {
+    return this.call("sendMessage", { chat_id: chatId, text, ...options });
   }
 
   sendPhoto(chatId: string, fileId: string, caption?: string): Promise<{ message_id: number }> {
