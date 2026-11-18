@@ -40,8 +40,10 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
           TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+          TELEGRAM_BOT_IDENTITY_ID: ${{ secrets.TELEGRAM_BOT_IDENTITY_ID }}
         run: |
           set -euo pipefail
           printf '%s' "$TELEGRAM_BOT_TOKEN" | npx wrangler secret put TELEGRAM_BOT_TOKEN --config wrangler.production.jsonc
           printf '%s' "$SESSION_SECRET" | npx wrangler secret put SESSION_SECRET --config wrangler.production.jsonc
           printf '%s' "$TELEGRAM_WEBHOOK_SECRET" | npx wrangler secret put TELEGRAM_WEBHOOK_SECRET --config wrangler.production.jsonc
+          printf '%s' "$TELEGRAM_BOT_IDENTITY_ID" | npx wrangler secret put TELEGRAM_BOT_IDENTITY_ID --config wrangler.production.jsonc
