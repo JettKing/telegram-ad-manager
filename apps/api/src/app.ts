@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { MiddlewareHandler } from "hono";
+import { cors } from "hono/cors";
 import type { ApiErrorPayload, ApiSuccessPayload, HealthPayload, ServiceState } from "@tg-ad-manager/contracts";
 import { D1ReplayStore, D1WebhookUpdateStore, MemoryWebhookUpdateStore, ProductionD1WebhookUpdateStore, parseTelegramUpdate, validateTelegramInitData, validateWebhookSecret, type D1Like } from "@tg-ad-manager/telegram";
 import { telegramServiceState } from "@tg-ad-manager/telegram";
@@ -29,6 +30,7 @@ export interface ApiBindings {
   SESSION_SECRET?: string;
   SESSION_TTL_SECONDS?: string;
   PLATFORM_ADMIN_TELEGRAM_IDS?: string;
+  WEB_APP_ORIGIN?: string;
   ENVIRONMENT?: string;
 }
 
@@ -121,6 +123,16 @@ app.use("*", async (context, next) => {
   context.header("x-request-id", id);
   await next();
 });
+
+app.use("/api/*", cors({
+  origin: (origin, context) => {
+    const allowedOrigin = runtimeEnv(context.env).WEB_APP_ORIGIN?.trim();
+    return allowedOrigin && origin === allowedOrigin ? origin : undefined;
+  },
+  allowHeaders: ["Content-Type", "Authorization", "X-Telegram-Init-Data"],
+  allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  exposeHeaders: ["X-Request-Id"],
+}));
 
 app.get("/health", (context) => context.json(healthPayload(runtimeEnv(context.env))));
 app.get("/health/ready", (context) => {

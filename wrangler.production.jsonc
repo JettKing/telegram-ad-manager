@@ -6,7 +6,8 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
   "vars": {
-    "D1_SCHEMA_CONTRACT": "production-0009"
+    "D1_SCHEMA_CONTRACT": "production-0009",
+    "WEB_APP_ORIGIN": "https://telegram-ad-manager.pages.dev"
   },
   "d1_databases": [
     {
