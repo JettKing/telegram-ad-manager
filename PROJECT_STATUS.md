@@ -27,7 +27,8 @@
 - GitHub Actions CI：通过，提交 `d17c6dd`。
 - Cloudflare Worker：已部署至 `https://tg-ad-manager-api.huaaplus.workers.dev`，D1、Telegram Secret、Cron 和 Queue producer 已配置。
 - Cloudflare Pages：已部署至 `https://telegram-ad-manager.pages.dev`，前端构建通过并已指向线上 Worker API。
+- Telegram Bot `@TGAdOpsBot`：已创建生产 Bot 身份，Webhook 已注册并通过 Telegram `getWebhookInfo` 验证。
 
 ## 尚未完成
 
-退款 API 因生产 D1 当前未发现退款申请表而安全返回 `REFUND_SCHEMA_UNAVAILABLE`；订阅表、平台管理员白名单和订阅 Cron 目前只接入本地 schema。Telegram 真实 Webhook、频道绑定和发布流程仍需使用真实频道进行联调；`TELEGRAM_BOT_IDENTITY_ID` 尚未补入 GitHub/Worker Secret，因此相关写入流程需先完成身份初始化。
+退款 API 因生产 D1 当前未发现退款申请表而安全返回 `REFUND_SCHEMA_UNAVAILABLE`；订阅表、平台管理员白名单和订阅 Cron 目前只接入本地 schema。真实频道绑定、素材入库和发布流程仍需使用测试频道完成业务联调。

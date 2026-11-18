@@ -21,6 +21,7 @@
 - API Worker：`https://tg-ad-manager-api.huaaplus.workers.dev`
 - 前端通过 `VITE_API_BASE_URL` 访问 API；Worker 通过 `WEB_APP_ORIGIN` 仅允许 Pages 生产域名跨域访问。
 - GitHub Actions：`.github/workflows/deploy-frontend.yml` 自动部署 Pages，`.github/workflows/deploy-backend.yml` 手动部署 Worker。
+- Telegram Webhook：`.github/workflows/configure-telegram-webhook.yml` 已成功注册并验证 `/webhooks/telegram`。
 
 ## 仍需用户确认后的生产操作
 
@@ -35,4 +36,4 @@ npx wrangler secret put SESSION_SECRET --config wrangler.production.jsonc
 npx wrangler secret put TELEGRAM_BOT_IDENTITY_ID --config wrangler.production.jsonc
 ```
 
-Worker 部署和前三个运行 Secret 已通过 GitHub Actions 完成；`TELEGRAM_BOT_IDENTITY_ID` 仍需在完成生产 Bot 身份初始化后补入。Secrets 只通过 GitHub/Cloudflare Secret 输入，不提交 `.env` 或 Git。
+Worker 部署、Bot 身份和四个运行 Secret 已通过 GitHub Actions 完成。Secrets 只通过 GitHub/Cloudflare Secret 输入，不提交 `.env` 或 Git。
