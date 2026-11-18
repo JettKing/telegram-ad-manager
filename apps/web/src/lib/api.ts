@@ -1,4 +1,5 @@
 import type { ApiResponse, HealthPayload } from "@tg-ad-manager/contracts";
+import { getTelegramInitData } from "../telegram";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 const SESSION_KEY = "tg_ad_manager_session";
@@ -31,8 +32,6 @@ export class ApiError extends Error {
 }
 
 function sessionToken(): string | null { return localStorage.getItem(SESSION_KEY); }
-function telegramInitData(): string { return (window as Window & { Telegram?: { WebApp?: { initData?: string } } }).Telegram?.WebApp?.initData ?? ""; }
-
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
@@ -58,7 +57,7 @@ export async function authenticate(): Promise<AuthData> {
   if (token) {
     try { await request<Record<string, unknown>>("/api/v1/auth/me"); const saved = localStorage.getItem(CONTEXT_KEY); if (saved) return JSON.parse(saved) as AuthData; } catch { localStorage.removeItem(SESSION_KEY); localStorage.removeItem(CONTEXT_KEY); }
   }
-  const initData = telegramInitData();
+  const initData = getTelegramInitData();
   if (!initData) throw new ApiError("INIT_DATA_REQUIRED", "请从 Telegram Bot 的“进入广告管理”入口打开 Mini App", 400);
   const data = await request<AuthData>("/api/v1/auth/telegram", { method: "POST", body: JSON.stringify({ initData }), headers: { "X-Telegram-Init-Data": initData } });
   localStorage.setItem(SESSION_KEY, data.session.token);
@@ -66,7 +65,9 @@ export async function authenticate(): Promise<AuthData> {
   return data;
 }
 
-export function logout(): void { localStorage.removeItem(SESSION_KEY); localStorage.removeItem(CONTEXT_KEY); }
+export async function logout(): Promise<void> {
+  try { if (sessionToken()) await request<{ loggedOut: boolean }>("/api/v1/auth/logout", { method: "POST" }); } finally { localStorage.removeItem(SESSION_KEY); localStorage.removeItem(CONTEXT_KEY); }
+}
 export const getWorkspace = () => request<{ tenantId: string; workspaceId: string; role: string; permissions: string[] }>("/api/v1/workspace/context");
 export const getChannels = () => request<{ channels: Channel[] }>("/api/v1/channels");
 export const bindChannel = (chatId: string) => request<{ channelId: string; status: string; title: string; telegramChatId: string }>("/api/v1/channels/bind", { method: "POST", body: JSON.stringify({ chatId }) });
