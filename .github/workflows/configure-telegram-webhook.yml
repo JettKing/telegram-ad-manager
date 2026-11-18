@@ -1,0 +1,35 @@
+name: configure-telegram-webhook
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  configure-webhook:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Register Telegram webhook
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+          WEBHOOK_URL: https://tg-ad-manager-api.huaaplus.workers.dev/webhooks/telegram
+        run: |
+          set -euo pipefail
+          response=$(curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
+            --data-urlencode "url=${WEBHOOK_URL}" \
+            --data-urlencode "secret_token=${TELEGRAM_WEBHOOK_SECRET}" \
+            --data-urlencode 'allowed_updates=["message","channel_post","edited_channel_post","callback_query"]' \
+            -d 'drop_pending_updates=false')
+          echo "$response"
+          echo "$response" | grep -q '"ok":true'
+
+      - name: Verify Telegram webhook
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          set -euo pipefail
+          response=$(curl -fsS "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo")
+          echo "$response"
+          echo "$response" | grep -q 'https://tg-ad-manager-api.huaaplus.workers.dev/webhooks/telegram'
