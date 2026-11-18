@@ -67,6 +67,23 @@ function paymentRepository(db: D1Like, env: ApiBindings) { return productionCont
 function publishRepository(db: D1Like, env: ApiBindings) { return productionContract(env) ? new ProductionPublishRepository(db) : new D1PublishRepository(db); }
 function subscriptionRepository(db: D1Like): SubscriptionRepository { return new SubscriptionRepository(db); }
 
+export function parseStartCommand(value: unknown): { chatId: string; payload?: string } | null {
+  if (!value || typeof value !== "object") return null;
+  const message = (value as Record<string, unknown>).message;
+  if (!message || typeof message !== "object") return null;
+  const messageRecord = message as Record<string, unknown>;
+  const chat = messageRecord.chat;
+  if (!chat || typeof chat !== "object") return null;
+  const chatRecord = chat as Record<string, unknown>;
+  if (chatRecord.type !== "private" || (typeof chatRecord.id !== "string" && typeof chatRecord.id !== "number")) return null;
+  if (typeof messageRecord.text !== "string") return null;
+  const match = messageRecord.text.trim().match(/^\/start(?:@[A-Za-z0-9_]+)?(?:\s+([\s\S]*))?$/i);
+  if (!match) return null;
+  return { chatId: String(chatRecord.id), ...(match[1]?.trim() ? { payload: match[1].trim() } : {}) };
+}
+
+const START_WELCOME_MESSAGE = "欢迎使用 TG Ad Manager！\n\n请打开 Mini App 开始绑定频道、管理广告素材和查看订单：\nhttps://telegram-ad-manager.pages.dev";
+
 export function healthPayload(env: ApiBindings = defaultRuntimeEnv()): HealthPayload {
   const current = runtimeEnv(env);
   return {
@@ -465,7 +482,7 @@ app.post("/webhooks/telegram", async (context) => {
   const env = runtimeEnv(context.env); const expectedSecret = env.TELEGRAM_WEBHOOK_SECRET; if (!expectedSecret) return context.json(failure("WEBHOOK_NOT_CONFIGURED", "Telegram Webhook Secret 尚未配置", requestId(context)), 503); if (!validateWebhookSecret(context.req.header("X-Telegram-Bot-Api-Secret-Token"), expectedSecret)) return context.json(failure("WEBHOOK_UNAUTHORIZED", "Webhook Secret 校验失败", requestId(context)), 401);
   let body: unknown; try { body = await context.req.json(); } catch { return context.json(failure("INVALID_JSON", "Webhook 请求体必须是有效 JSON", requestId(context)), 400); }
   const update = parseTelegramUpdate(body); if (!update) return context.json(failure("INVALID_UPDATE", "Webhook 请求缺少有效 update_id", requestId(context)), 400);
-  try { const store = env.DB && env.TELEGRAM_BOT_IDENTITY_ID ? (productionContract(env) ? new ProductionD1WebhookUpdateStore(env.DB, env.TELEGRAM_BOT_IDENTITY_ID) : new D1WebhookUpdateStore(env.DB, env.TELEGRAM_BOT_IDENTITY_ID)) : developmentWebhookStore; const result = await store.claim(update, JSON.stringify(body), new Date().toISOString()); const media = env.DB && env.TELEGRAM_BOT_IDENTITY_ID ? await mediaRepository(env.DB, env).ingest(env.TELEGRAM_BOT_IDENTITY_ID, body) : { handled: false, reason: "scope_not_found" as const }; return context.json(success({ received: true, accepted: result.accepted, duplicate: result.duplicate, updateId: update.update_id, media }, requestId(context))); }
+  try { const store = env.DB && env.TELEGRAM_BOT_IDENTITY_ID ? (productionContract(env) ? new ProductionD1WebhookUpdateStore(env.DB, env.TELEGRAM_BOT_IDENTITY_ID) : new D1WebhookUpdateStore(env.DB, env.TELEGRAM_BOT_IDENTITY_ID)) : developmentWebhookStore; const result = await store.claim(update, JSON.stringify(body), new Date().toISOString()); const media = env.DB && env.TELEGRAM_BOT_IDENTITY_ID ? await mediaRepository(env.DB, env).ingest(env.TELEGRAM_BOT_IDENTITY_ID, body) : { handled: false, reason: "scope_not_found" as const }; let welcomeSent = false; const start = result.accepted ? parseStartCommand(body) : null; if (start && env.TELEGRAM_BOT_TOKEN) { try { await new TelegramBotApiClient(env.TELEGRAM_BOT_TOKEN, fetch, env.TELEGRAM_API_BASE_URL ?? "https://api.telegram.org").sendMessage(start.chatId, START_WELCOME_MESSAGE); welcomeSent = true; } catch (error) { console.error("telegram_start_welcome_failed", { updateId: update.update_id, message: error instanceof Error ? error.message : "unknown" }); } } return context.json(success({ received: true, accepted: result.accepted, duplicate: result.duplicate, updateId: update.update_id, media, welcomeSent }, requestId(context))); }
   catch (error) { console.error("telegram_webhook_persistence_error", { updateId: update.update_id, message: error instanceof Error ? error.message : "unknown" }); return context.json(failure("WEBHOOK_PERSISTENCE_FAILED", "Webhook 暂时无法持久化", requestId(context)), 503); }
 });
 

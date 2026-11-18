@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { app } from "../apps/api/src/app";
+import { app, parseStartCommand } from "../apps/api/src/app";
 import { MemoryWebhookUpdateStore, validateTelegramInitData, validateWebhookSecret } from "@tg-ad-manager/telegram";
 
 function createSignedInitData(botToken: string, authDate: number): string {
@@ -50,6 +50,13 @@ describe("Telegram Mini App authentication", () => {
 });
 
 describe("Telegram Webhook", () => {
+  it("parses private /start commands and ignores group messages", () => {
+    expect(parseStartCommand({ message: { chat: { id: 6092237879, type: "private" }, text: "/start invite_abc" } })).toEqual({ chatId: "6092237879", payload: "invite_abc" });
+    expect(parseStartCommand({ message: { chat: { id: 6092237879, type: "private" }, text: "/start@TGAdOpsBot" } })).toEqual({ chatId: "6092237879" });
+    expect(parseStartCommand({ message: { chat: { id: -100123, type: "supergroup" }, text: "/start" } })).toBeNull();
+    expect(parseStartCommand({ message: { chat: { id: 6092237879, type: "private" }, text: "hello /start" } })).toBeNull();
+  });
+
   it("uses constant-time secret matching semantics", () => {
     expect(validateWebhookSecret("s3cr3t_token", "s3cr3t_token")).toBe(true);
     expect(validateWebhookSecret("s3cr3t_token", "wrong")).toBe(false);
