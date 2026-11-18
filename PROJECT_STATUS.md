@@ -24,7 +24,10 @@
 - `pnpm lint`：通过。
 - `pnpm test`：通过，10 个测试文件、39 个测试。
 - `pnpm build`：通过。
+- GitHub Actions CI：通过，提交 `d17c6dd`。
+- Cloudflare Worker：已部署至 `https://tg-ad-manager-api.huaaplus.workers.dev`，D1、Telegram Secret、Cron 和 Queue producer 已配置。
+- Cloudflare Pages：已部署至 `https://telegram-ad-manager.pages.dev`，前端构建通过并已指向线上 Worker API。
 
 ## 尚未完成
 
-退款 API 因生产 D1 当前未发现退款申请表而安全返回 `REFUND_SCHEMA_UNAVAILABLE`；订阅表、平台管理员白名单和订阅 Cron 目前只接入本地 schema。生产 Queue 已存在但没有 producer/consumer。Worker dry-run 已通过，实际上传因 Wrangler OAuth CAPTCHA 未完成而阻塞；Secrets、Cron 运行验证和 Telegram 真实联调仍未执行。
+退款 API 因生产 D1 当前未发现退款申请表而安全返回 `REFUND_SCHEMA_UNAVAILABLE`；订阅表、平台管理员白名单和订阅 Cron 目前只接入本地 schema。Telegram 真实 Webhook、频道绑定和发布流程仍需使用真实频道进行联调；`TELEGRAM_BOT_IDENTITY_ID` 尚未补入 GitHub/Worker Secret，因此相关写入流程需先完成身份初始化。
