@@ -82,8 +82,8 @@ export function parseStartCommand(value: unknown): { chatId: string; payload?: s
   return { chatId: String(chatRecord.id), ...(match[1]?.trim() ? { payload: match[1].trim() } : {}) };
 }
 
-const START_WELCOME_MESSAGE = "欢迎来到 TG Ad Manager！\n点击下方 Mini App，开始绑定频道并管理你的 Telegram 广告。";
-const START_WELCOME_MARKUP = { inline_keyboard: [[{ text: "打开 Mini App", web_app: { url: "https://telegram-ad-manager.pages.dev" } }]] };
+const START_WELCOME_MESSAGE = "欢迎来到 TG Ad Manager！\n点击下方“进入广告管理”，开始绑定频道并管理你的 Telegram 广告。";
+const START_WELCOME_MARKUP = { inline_keyboard: [[{ text: "进入广告管理", web_app: { url: "https://telegram-ad-manager.pages.dev" } }]] };
 
 export function healthPayload(env: ApiBindings = defaultRuntimeEnv()): HealthPayload {
   const current = runtimeEnv(env);

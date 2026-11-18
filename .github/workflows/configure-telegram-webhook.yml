@@ -41,6 +41,6 @@ jobs:
           set -euo pipefail
           response=$(curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setChatMenuButton" \
             -H 'content-type: application/json' \
-            --data '{"menu_button":{"type":"web_app","text":"打开 Mini App","web_app":{"url":"https://telegram-ad-manager.pages.dev"}}}')
+            --data '{"menu_button":{"type":"web_app","text":"进入广告管理","web_app":{"url":"https://telegram-ad-manager.pages.dev"}}}')
           echo "$response"
           echo "$response" | grep -q '"ok":true'
