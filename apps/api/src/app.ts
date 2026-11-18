@@ -152,6 +152,7 @@ app.use("/api/*", cors({
   exposeHeaders: ["X-Request-Id"],
 }));
 
+app.get("/", (context) => context.json({ ok: true, service: "tg-ad-manager-api", message: "TG Ad Manager API is running", health: "/health", apiHealth: "/api/v1/health", webhook: "/webhooks/telegram" }));
 app.get("/health", (context) => context.json(healthPayload(runtimeEnv(context.env))));
 app.get("/health/ready", (context) => {
   const health = healthPayload(runtimeEnv(context.env));
