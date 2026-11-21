@@ -14,7 +14,7 @@
       "binding": "DB",
       "database_name": "tg-ad-manager",
       "database_id": "d9a4ad54-d504-40d6-abd5-a3e978a8ff5a",
-      "migrations_dir": "apps/api/migrations"
+      "migrations_dir": "apps/api/production-migrations"
     }
   ],
   "queues": {

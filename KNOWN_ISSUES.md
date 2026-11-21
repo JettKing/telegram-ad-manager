@@ -1,9 +1,14 @@
 # KNOWN_ISSUES
 
-1. 生产 `creative_media` 没有 Telegram source message/chat 幂等字段，因此 production media adapter 只提供读取；Webhook 媒体入库会返回 `MEDIA_SOURCE_SCHEMA_REQUIRED`。
-2. 生产 D1 审计中没有发现已确认的退款申请表，production payments adapter 只实现付款凭证和 Finance 审核；退款接口返回 `REFUND_SCHEMA_UNAVAILABLE`。
-3. `/api/v1/schedules` 和创建排期接口仍实例化旧 `D1PublishRepository`，需要下一步复用 `production-publishing.ts` 的 HTTP 查询和创建实现。
-4. Cloudflare Worker、Queue consumer/DLQ、Secrets、Webhook URL 和 Telegram 真实联调尚未执行；当前只完成只读资源审计和本地代码门禁。
-5. 生产 adapter 尚未经过真实 D1 写入回归；任何远程 migration 或 deploy 都必须在独立确认后执行。
-6. 订阅计划和权益目前先接入本地 schema；`production-0008` contract 会明确返回 `SUBSCRIPTION_SCHEMA_NOT_CONFIGURED`，不会假设生产已有订阅表。
-7. 付费升级目前只创建 pending checkout request，尚未接入真实支付网关或 Finance 人工审核动作。
+截至 2026-11-21：
+
+1. 生产 D1 有独立 schema 和迁移历史；仓库尚无可重建的生产基线。媒体增量对应字段和表已存在但 0009 未记录在 Wrangler 迁移账本中。不要将开发迁移应用于生产，或重放归档的历史媒体 SQL。
+   迁移目录隔离和配置校验修复仅在修复分支完成；在合并前，线上仓库默认分支仍含有错误目录和危险操作说明。
+   2026-11-21 只读查询确认生产 D1 没有 `telegram_init_data_replays` 表。仓库登录代码依赖该表并在不可用时拒绝认证；只部署签名修复无法完成真实登录。需设计并在隔离 D1 测试安全迁移，不可关闭防重放来绕过缺口。
+2. 订单通用状态迁移可能绕过财务审核；生产部分付款审核可能直接把订单标为全额 paid。排期及发布前的付款约束需要一并修复和验证。
+3. 订单取消或频道解绑后，已有待发布任务仍可能执行；需要设计并验证任务取消与并发发送的边界。
+4. 生产退款申请表及订阅表未接入，相关接口返回 `REFUND_SCHEMA_UNAVAILABLE` 或 `SUBSCRIPTION_SCHEMA_NOT_CONFIGURED`；真实支付回调/人工收款审核入口尚未形成完整闭环。
+5. Queue 没有完整的 consumer 发布链，现有发布路径依赖 Cron；真实频道、Telegram WebView 登录、媒体入库和发布尚需隔离测试与验收。HTTP 健康检查并不证明这些业务可用。
+6. 前端业务操作不覆盖完整订单、付款、审核、排期和发布流程；排期 DTO 仍需检查前后端字段一致性。R2 未配置。
+7. 任何生产数据库写入、部署、密钥或 Webhook 修改均应在确认具体方案后执行；参见 `DEPLOYMENT.md`。
+8. 频道记录与权限快照目前不是同一事务，异常或并发交错可能留下陈旧/部分状态；已存在的历史频道绑定也不会因新校验自动重新认证。2026-11-21 查询未发现重复的生产频道权限快照，但上线前仍应核查历史绑定归属和真实 D1 并发行为。
