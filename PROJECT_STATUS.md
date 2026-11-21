@@ -1,5 +1,12 @@
 # PROJECT_STATUS
 
+## 2026-11-21 只读复核
+
+- Cloudflare 生产 Worker 与 Pages 项目均存在；Worker 绑定了 D1、Queue、四项 Secret 名称并配置五分钟 Cron，前端和 API 健康接口均返回 HTTP 200。未读取或修改 Secret、业务记录、Webhook 或生产配置。
+- 生产 D1 的媒体字段和相册表存在，但 `d1_migrations` 仅记录 `0001_core_foundation.sql`，未记录 0009。生产 schema 与开发迁移链不同，当前不能安全地把后者应用到生产；历史媒体 SQL 已归档，不得重放。
+- 生产 D1 缺少仓库登录路径依赖的 `telegram_init_data_replays` 表；修复分支修正 HMAC 算法后，仍需经过隔离测试与审批的 schema 方案才能验证真实登录。
+- 健康检查、构建和单元测试不证明 Telegram 登录、付款或发布等业务链路已真实验收。订单财务状态绕过、部分付款和取消后发布等问题仍需处理；详情见 `KNOWN_ISSUES.md`。
+
 ## 当前状态
 
 阶段 14 已完成订阅审核、付款确认、续费/到期处理和基础权益强制执行。阶段 13 的 SaaS 订阅基础、阶段 12 的生产排期 HTTP API，以及 Telegram 登录身份、频道绑定、CRM、订单、付款和 Webhook 能力均保留。旧开发 schema 仍保留，默认 contract 不变。
@@ -16,7 +23,9 @@
 - `subscription.ts` 与 Migration 0011：提供订阅计划、租户订阅、权益额度、月度用量、幂等升级请求；付费升级保持 pending，不伪造支付完成。
 - 阶段 14：平台管理员白名单审核升级请求；通过后切换订阅、写入 `financial_transactions` 和 `subscription_events`；Cron 处理 FREE 自动续费与付费订阅到期；订单和频道绑定执行额度检查。
 
-## 检查证据
+## 历史检查记录
+
+以下为 2026-11-18 阶段文档原记录；2026-11-21 实测发现原始 `cf:config:check` 会错误截断 HTTPS URL，并不能复现当时“通过”的结论。当前分支已修复解析器，实际本地验证见 `TEST_REPORT.md`。
 
 - `pnpm cf:config:check`：通过。
 - `pnpm db:check`：通过，11 份本地 Migration 连续有效。

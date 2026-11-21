@@ -6,7 +6,7 @@
 
 ## Production schema contract
 
-当 `D1_SCHEMA_CONTRACT=production-0008` 时，路由使用 production adapter：
+当 `D1_SCHEMA_CONTRACT=production-0009` 时，路由使用 production adapter：
 
 | 领域 | 生产表 | 状态 |
 |---|---|---|
@@ -22,6 +22,8 @@
 ## 既有接口
 
 CRM：`GET/POST/PATCH /api/v1/customers`。套餐：`GET/POST/PATCH /api/v1/packages`。订单：`GET/POST /api/v1/orders`、`GET /api/v1/orders/:orderId`、`PATCH /api/v1/orders/:orderId/content`、`POST /api/v1/orders/:orderId/submit`、`POST /api/v1/orders/:orderId/transition`。付款：`GET/POST /api/v1/orders/:orderId/payments`、`POST /api/v1/finance/payments/:paymentId/review`。频道、媒体、排期、Telegram auth 和 Webhook 仍按前置阶段契约提供，并受 RBAC 与工作空间隔离保护。
+
+频道绑定 `POST /api/v1/channels/bind` 除 `channel:manage` 外，还需验证会话对应的 Telegram 用户是目标频道创建者或管理员；非管理员返回 `CHANNEL_USER_NOT_ADMIN`（403），Telegram 验证失败返回 `CHANNEL_TELEGRAM_CHECK_FAILED`（503），已绑定其他工作空间返回 `CHANNEL_ALREADY_BOUND`（409）。Bot 无发布权限时返回 `CHANNEL_PERMISSION_ERROR`（422）。
 
 生产退款 API 在退款表完成 schema 评审前返回 `REFUND_SCHEMA_UNAVAILABLE`。
 

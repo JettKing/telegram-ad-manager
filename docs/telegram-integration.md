@@ -1,6 +1,6 @@
 # Telegram 集成依据与实现说明
 
-本阶段实现依据 Telegram 官方文档：Mini App 的 `initData` 必须在服务端验证，不能信任 `initDataUnsafe`；HMAC 校验使用按字母排序的全部字段构造 `data_check_string`，仅排除 `hash`，用 `HMAC-SHA256(bot_token, "WebAppData")` 派生密钥，再校验 `hash`，同时检查 `auth_date` 的新鲜度。官方文档将 `signature` 描述为第三方 Ed25519 校验字段，因此第三方校验另有排除 `hash` 和 `signature` 的数据构造规则；本项目当前是 Bot Token HMAC 路径。
+Mini App 的 `initData` 必须在服务端验证，不能信任 `initDataUnsafe`。Bot Token 路径使用按字母排序的全部字段构造 `data_check_string`，仅排除 `hash`；密钥派生的 HMAC-SHA256 **key 是固定字符串 `WebAppData`，message 是 Bot Token**，再用派生密钥校验 `hash`，同时检查 `auth_date` 的新鲜度。第三方 Ed25519 校验另有排除 `hash` 和 `signature` 的数据构造规则，本项目当前使用 Bot Token HMAC 路径。
 
 Webhook 由 `setWebhook` 的 `secret_token` 配置，Telegram 会在请求中发送 `X-Telegram-Bot-Api-Secret-Token`；Telegram 在收到非 2xx 时会重试，因此服务端先校验、去重和持久化最小 Update，再交给后续异步处理。
 
@@ -11,7 +11,7 @@ Webhook 由 `setWebhook` 的 `secret_token` 配置，Telegram 会在请求中发
 - `apps/api/src/app.ts`：`POST /api/v1/auth/telegram` 与 `POST /webhooks/telegram`，拒绝缺少密钥、无效 JSON、错误签名和无效 update。
 - `apps/api/migrations/0004_telegram_security.sql`：`telegram_webhook_logs` 与 `telegram_init_data_replays` 持久化表。
 
-当前尚未进行真实 Telegram 外部联调，因为本项目尚未配置 Bot Token、Webhook Secret 和公开 HTTPS Webhook URL。代码和测试不会把缺少这些配置的环境标记为真实联调成功。
+2026-11-21 只读核对确认线上 Worker 存在 Bot Token 和 Webhook Secret 的绑定名称，未读取密钥值。真实 Telegram WebView 登录、频道绑定及发布仍需隔离验收，不能仅凭绑定或本地测试认定业务可用。
 
 ## References
 

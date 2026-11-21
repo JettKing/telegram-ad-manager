@@ -21,6 +21,8 @@ pnpm build
 pnpm dev
 ```
 
+生产迁移目录与开发迁移链已经隔离；线上 schema 和迁移账本尚未完整对齐，**不要将开发迁移应用于生产或重放归档 SQL**。操作前请阅读 `DEPLOYMENT.md`。
+
 前端监听 3000，API 监听 8787。浏览器可访问 `/`，健康接口为 `/health`、`/health/ready`、`/api/v1/health`，页面路由清单为 `/manus-routes.json`。
 
 平台会话需要在受保护环境配置 `SESSION_SECRET`；Telegram 认证还需要 `TELEGRAM_BOT_TOKEN`，生产持久化需要 Cloudflare D1 binding。客户端使用 `Authorization: Bearer <session.token>`，不要把 Bot Token 或 Session Secret 放在前端。

@@ -18,6 +18,7 @@ describe("Telegram channel verification", () => {
       async getMe() { return { id: 99, is_bot: true, first_name: "Bot" }; },
       async getChat() { return { id: -100123, type: "channel", title: "Test Channel", username: "test_channel" }; },
       async getChatMember() { return { status: "member", user: { id: 99, is_bot: true, first_name: "Bot" } }; },
+      async sendMessage() { return { message_id: 1 }; },
     };
     const verified = await verifyTelegramChannel(client, "@test_channel", "2026-11-17T00:00:00.000Z");
     expect(verified.telegramChatId).toBe("-100123");

@@ -1,5 +1,7 @@
 # Production Integration — Stage 9–14 / production-0009
 
+> 下文为阶段 9–14 的历史记录，资源状态不代表当前线上状态。2026-11-21 的最新核对和迁移安全边界以 `PROJECT_STATUS.md`、`DEPLOYMENT.md` 与 `apps/api/production-migrations/README.md` 为准；历史 0009 SQL 现已移至归档目录，不得盲目重放。
+
 ## 只读审计结果
 
 Cloudflare 账户 `bf9869d76a7fcbd9f75aefc5f98f3fbb` 的目标 D1 为 `tg-ad-manager` / `d9a4ad54-d504-40d6-abd5-a3e978a8ff5a`，目标 Queue 为 `tg-ad-manager-publish` / `9fc8423242564c1e814108cdf5883208`。D1 已存在 40 张生产表；Queue 已存在但没有 producer 或 consumer；Worker `tg-ad-manager-api` 尚未创建。
