@@ -74,7 +74,10 @@ export const bindChannel = (chatId: string) => request<{ channelId: string; stat
 export const getCustomers = () => request<{ customers: Customer[] }>("/api/v1/customers");
 export const createCustomer = (input: Record<string, unknown>) => request<{ customerId: string }>("/api/v1/customers", { method: "POST", body: JSON.stringify(input) });
 export const getPackages = () => request<{ packages: Package[] }>("/api/v1/packages");
+export const createPackage = (input: Record<string, unknown>) => request<{ packageId: string }>("/api/v1/packages", { method: "POST", body: JSON.stringify(input) });
 export const getOrders = () => request<{ orders: Order[] }>("/api/v1/orders");
+export const createOrder = (input: Record<string, unknown>) => request<{ orderId: string; orderNo: string; receivableMinor: number }>("/api/v1/orders", { method: "POST", body: JSON.stringify(input) });
+export const createSchedule = (orderId: string, input: Record<string, unknown>) => request<{ scheduleId: string; taskId: string; idempotencyKey: string }>(`/api/v1/orders/${orderId}/schedules`, { method: "POST", body: JSON.stringify(input) });
 export async function getSchedules(): Promise<{ schedules: Schedule[] }> {
   const response = await request<{ schedules: Array<Record<string, unknown>> }>("/api/v1/schedules");
   return { schedules: response.schedules.map((schedule) => ({
