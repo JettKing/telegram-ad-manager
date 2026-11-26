@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isExplicitMediaCommand, parseTelegramMediaUpdate, transitionMediaGroup } from "../apps/api/src/media";
+import { parseTelegramMediaUpdate, transitionMediaGroup } from "../apps/api/src/media";
 
 const base = { update_id: 1, message: { message_id: 10, date: 1794873600, chat: { id: 123, type: "private" }, from: { id: 456 } } };
 
@@ -24,11 +24,9 @@ describe("Telegram media parser", () => {
     expect(parseTelegramMediaUpdate({ update_id: 3, message: { message_id: 1, chat: { id: 1 } } })).toBeNull();
   });
 
-  it("marks channel posts and accepts only explicit ad commands", () => {
+  it("marks channel posts so ingestion can reject them regardless of caption", () => {
     const parsed = parseTelegramMediaUpdate({ update_id: 4, channel_post: { message_id: 2, chat: { id: -100, type: "channel" }, caption: "/ad summer campaign", photo: [{ file_id: "channel-photo" }] } });
     expect(parsed?.sourceKind).toBe("channel");
-    expect(isExplicitMediaCommand(parsed?.caption)).toBe(true);
-    expect(isExplicitMediaCommand("普通频道内容")).toBe(false);
   });
 });
 

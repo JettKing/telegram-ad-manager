@@ -37,7 +37,6 @@ export interface ParsedMediaMessage {
   sourceKind: "private" | "channel" | "other";
 }
 
-export function isExplicitMediaCommand(value: string | undefined): boolean { return typeof value === "string" && /^(?:\/ad|\/upload)(?:@[A-Za-z0-9_]+)?(?:\s|$)/i.test(value.trim()); }
 export interface MediaScope {
   tenantId: string;
   workspaceId: string;
@@ -179,11 +178,7 @@ export class D1MediaRepository {
   async ingest(botIdentityId: string, update: unknown, now = new Date().toISOString()): Promise<MediaIngestResult> {
     const media = parseTelegramMediaUpdate(update, new Date(now));
     if (!media) return { handled: false, reason: "unsupported_update" };
-    if (media.sourceKind !== "private" && !isExplicitMediaCommand(media.caption ?? media.textContent)) {
-      if (!media.mediaGroupId) return { handled: false, reason: "unsupported_update" };
-      const authorizedGroup = await this.db.prepare("SELECT id FROM media_groups WHERE bot_identity_id = ? AND telegram_media_group_id = ? LIMIT 1").bind(botIdentityId, media.mediaGroupId).first<{ id: string }>();
-      if (!authorizedGroup) return { handled: false, reason: "unsupported_update" };
-    }
+    if (media.sourceKind !== "private") return { handled: false, reason: "unsupported_update" };
     const scope = await this.resolveScope(botIdentityId, media.sourceChatId, media.fromTelegramUserId);
     if (!scope) return { handled: false, reason: "scope_not_found" };
     const assetId = await this.upsertAsset(scope, botIdentityId, media, now);
