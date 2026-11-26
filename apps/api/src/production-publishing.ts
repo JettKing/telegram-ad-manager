@@ -179,7 +179,7 @@ export class ProductionPublishRepository {
 
   async markExpired(expiration: ProductionExpiration, result: "succeeded" | "failed", now: string): Promise<void> {
     if (result === "succeeded") await this.db.prepare("UPDATE ad_orders SET status = 'completed', updated_at = ? WHERE id = ? AND status = 'published'").bind(now, expiration.order_id).run();
-    await this.db.prepare("INSERT INTO publish_task_logs (id, tenant_id, task_id, attempt, status, message, duration_ms, created_at) SELECT ?, tenant_id, id, attempts, ?, ?, NULL, ? FROM publish_tasks WHERE id = ?").bind(crypto.randomUUID(), expiration.task_id, result, JSON.stringify({ expiration: true }), now, expiration.task_id).run();
+    await this.db.prepare("INSERT INTO publish_task_logs (id, tenant_id, task_id, attempt, status, message, duration_ms, created_at) SELECT ?, tenant_id, id, attempts, ?, ?, NULL, ? FROM publish_tasks WHERE id = ?").bind(crypto.randomUUID(), result, JSON.stringify({ expiration: true }), now, expiration.task_id).run();
   }
 }
 
