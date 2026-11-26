@@ -186,7 +186,7 @@ export class ProductionPublishRepository {
 export async function processProductionDuePublishTasks(env: ProductionPublishRuntimeEnv, now = new Date().toISOString()): Promise<{ processed: number; succeeded: number; retried: number; failed: number; expired: number }> {
   if (!env.DB || !env.TELEGRAM_BOT_TOKEN) return { processed: 0, succeeded: 0, retried: 0, failed: 0, expired: 0 };
   const repository = new ProductionPublishRepository(env.DB);
-  const publisher = new TelegramPublisher(new TelegramBotApiClient(env.TELEGRAM_BOT_TOKEN, fetch, env.TELEGRAM_API_BASE_URL ?? "https://api.telegram.org"));
+  const publisher = new TelegramPublisher(new TelegramBotApiClient(env.TELEGRAM_BOT_TOKEN, (input, init) => fetch(input, init), env.TELEGRAM_API_BASE_URL ?? "https://api.telegram.org"));
   const result = { processed: 0, succeeded: 0, retried: 0, failed: 0, expired: 0 };
   for (let index = 0; index < 10; index += 1) {
     const task = await repository.claimNextTask(now);

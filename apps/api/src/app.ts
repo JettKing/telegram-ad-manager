@@ -448,7 +448,7 @@ app.post("/api/v1/orders/:orderId/schedules", requireAuth("publish:write"), asyn
 
 function channelApiConfig(env: ApiBindings): { db: D1Like; botIdentityId: string; client: TelegramBotApiClient } | null {
   if (!env.DB || !env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_BOT_IDENTITY_ID) return null;
-  return { db: env.DB, botIdentityId: env.TELEGRAM_BOT_IDENTITY_ID, client: new TelegramBotApiClient(env.TELEGRAM_BOT_TOKEN, fetch, env.TELEGRAM_API_BASE_URL ?? "https://api.telegram.org") };
+  return { db: env.DB, botIdentityId: env.TELEGRAM_BOT_IDENTITY_ID, client: new TelegramBotApiClient(env.TELEGRAM_BOT_TOKEN, (input, init) => fetch(input, init), env.TELEGRAM_API_BASE_URL ?? "https://api.telegram.org") };
 }
 
 app.get("/api/v1/channels", requireAuth("channel:read"), async (context) => {
