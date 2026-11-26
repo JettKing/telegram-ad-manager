@@ -9,3 +9,5 @@
 .toolbar-action-button{min-height:36px;padding:8px 12px;white-space:nowrap}.toolbar-action-button svg{flex:0 0 auto}@media(max-width:720px){.toolbar-action-button{min-height:44px;padding:8px 12px}}
 
 .page-heading>div:first-child{flex:1;min-width:0}.page-heading p{max-width:none}
+
+.page-heading p{white-space:nowrap;word-break:keep-all}
