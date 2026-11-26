@@ -5,21 +5,8 @@ const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, ""
 const SESSION_KEY = "tg_ad_manager_session";
 const CONTEXT_KEY = "tg_ad_manager_context";
 
-export type SessionUser = {
-  id: string;
-  telegramUserId: string;
-  displayName: string;
-};
-
-export type AuthData = {
-  authenticated: boolean;
-  user: SessionUser;
-  tenant: { id: string; name: string };
-  workspace: { id: string; name: string };
-  role: string;
-  session: { token: string; expiresAt: string };
-};
-
+export type SessionUser = { id: string; telegramUserId: string; displayName: string };
+export type AuthData = { authenticated: boolean; user: SessionUser; tenant: { id: string; name: string }; workspace: { id: string; name: string }; role: string; session: { token: string; expiresAt: string } };
 export type Channel = { id: string; telegram_chat_id: string; username?: string; title: string; status: string; can_post: number; can_pin: number; can_delete: number };
 export type Customer = { id: string; name: string; contact?: string; telegram_username?: string; status: string; total_spend_minor: number; updated_at: string };
 export type Package = { id: string; name: string; description?: string; ad_type: string; publish_count: number; price_minor: number; is_enabled: number; is_public: number };
@@ -27,54 +14,17 @@ export type Order = { id: string; order_no: string; customer_id: string; channel
 export type Schedule = { id: string; order_id: string; scheduled_at: string; status: string; created_at: string } & Record<string, unknown>;
 export type PublishTask = { id: string; order_id: string; status: string; attempt_count: number; scheduled_at?: string; last_error?: string } & Record<string, unknown>;
 export type Payment = { id: string; order_id: string; method: string; amount_minor: number; transaction_ref?: string; proof_asset_id?: string; status: string; reviewed_by?: string; reviewed_at?: string; review_note?: string; created_at: string };
+export type Refund = { id: string; order_id: string; amount_minor: number; reason: string; method?: string; transaction_ref?: string; status: string; requested_by?: string; reviewed_by?: string; reviewed_at?: string; review_note?: string; created_at: string };
+export type ReconciliationRow = { orderId: string; orderNo: string; dueMinor: number; approvedPaymentMinor: number; approvedRefundMinor: number; paymentStatus: string; status: string };
+export type TimelineEvent = { createdAt: string; type: string; objectId?: string; details?: string; status?: string; amountMinor?: number; reason?: string; entryType?: string; direction?: string; transactionRef?: string };
 export type OperationsSummary = { taskCounts: Record<string, number>; staleProcessing: number; openAlerts: number; latestCron?: { status: string; checkedAt: string; details: Record<string, unknown> } };
 
-export class ApiError extends Error {
-  constructor(public readonly code: string, message: string, public readonly status: number) { super(message); }
-}
-
+export class ApiError extends Error { constructor(public readonly code: string, message: string, public readonly status: number) { super(message); } }
 function sessionToken(): string | null { return localStorage.getItem(SESSION_KEY); }
-export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers);
-  headers.set("Accept", "application/json");
-  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-  const token = sessionToken();
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers });
-  let payload: ApiResponse<T>;
-  try {
-    payload = await response.json() as ApiResponse<T>;
-  } catch {
-    throw new ApiError("INVALID_API_RESPONSE", `API 返回了无法解析的响应（HTTP ${response.status}）`, response.status);
-  }
-  if (!response.ok || !payload.ok) {
-    const error = payload.ok ? { code: "HTTP_ERROR", message: `服务返回 ${response.status}` } : payload.error;
-    throw new ApiError(error.code, error.message, response.status);
-  }
-  return payload.data;
-}
-
-export async function getHealth(signal?: AbortSignal): Promise<ApiResponse<HealthPayload>> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/health`, { signal, headers: { Accept: "application/json" } });
-  return await response.json() as ApiResponse<HealthPayload>;
-}
-
-export async function authenticate(): Promise<AuthData> {
-  const token = sessionToken();
-  if (token) {
-    try { await request<Record<string, unknown>>("/api/v1/auth/me"); const saved = localStorage.getItem(CONTEXT_KEY); if (saved) return JSON.parse(saved) as AuthData; } catch { localStorage.removeItem(SESSION_KEY); localStorage.removeItem(CONTEXT_KEY); }
-  }
-  const initData = getTelegramInitData();
-  if (!initData) throw new ApiError("INIT_DATA_REQUIRED", "请从 Telegram Bot 的“进入广告管理”入口打开 Mini App", 400);
-  const data = await request<AuthData>("/api/v1/auth/telegram", { method: "POST", body: JSON.stringify({ initData }), headers: { "X-Telegram-Init-Data": initData } });
-  localStorage.setItem(SESSION_KEY, data.session.token);
-  localStorage.setItem(CONTEXT_KEY, JSON.stringify(data));
-  return data;
-}
-
-export async function logout(): Promise<void> {
-  try { if (sessionToken()) await request<{ loggedOut: boolean }>("/api/v1/auth/logout", { method: "POST" }); } finally { localStorage.removeItem(SESSION_KEY); localStorage.removeItem(CONTEXT_KEY); }
-}
+export async function request<T>(path: string, init: RequestInit = {}): Promise<T> { const headers = new Headers(init.headers); headers.set("Accept", "application/json"); if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json"); const token = sessionToken(); if (token) headers.set("Authorization", `Bearer ${token}`); const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers }); let payload: ApiResponse<T>; try { payload = await response.json() as ApiResponse<T>; } catch { throw new ApiError("INVALID_API_RESPONSE", `API 返回了无法解析的响应（HTTP ${response.status}）`, response.status); } if (!response.ok || !payload.ok) { const error = payload.ok ? { code: "HTTP_ERROR", message: `服务返回 ${response.status}` } : payload.error; throw new ApiError(error.code, error.message, response.status); } return payload.data; }
+export async function getHealth(signal?: AbortSignal): Promise<ApiResponse<HealthPayload>> { const response = await fetch(`${API_BASE_URL}/api/v1/health`, { signal, headers: { Accept: "application/json" } }); return await response.json() as ApiResponse<HealthPayload>; }
+export async function authenticate(): Promise<AuthData> { const token = sessionToken(); if (token) { try { await request<Record<string, unknown>>("/api/v1/auth/me"); const saved = localStorage.getItem(CONTEXT_KEY); if (saved) return JSON.parse(saved) as AuthData; } catch { localStorage.removeItem(SESSION_KEY); localStorage.removeItem(CONTEXT_KEY); } } const initData = getTelegramInitData(); if (!initData) throw new ApiError("INIT_DATA_REQUIRED", "请从 Telegram Bot 的“进入广告管理”入口打开 Mini App", 400); const data = await request<AuthData>("/api/v1/auth/telegram", { method: "POST", body: JSON.stringify({ initData }), headers: { "X-Telegram-Init-Data": initData } }); localStorage.setItem(SESSION_KEY, data.session.token); localStorage.setItem(CONTEXT_KEY, JSON.stringify(data)); return data; }
+export async function logout(): Promise<void> { try { if (sessionToken()) await request<{ loggedOut: boolean }>("/api/v1/auth/logout", { method: "POST" }); } finally { localStorage.removeItem(SESSION_KEY); localStorage.removeItem(CONTEXT_KEY); } }
 export const getWorkspace = () => request<{ tenantId: string; workspaceId: string; role: string; permissions: string[] }>("/api/v1/workspace/context");
 export const getChannels = () => request<{ channels: Channel[] }>("/api/v1/channels");
 export const bindChannel = (chatId: string) => request<{ channelId: string; status: string; title: string; telegramChatId: string }>("/api/v1/channels/bind", { method: "POST", body: JSON.stringify({ chatId }) });
@@ -88,25 +38,15 @@ export const submitOrder = (orderId: string) => request<{ updated: boolean; stat
 export const createPayment = (orderId: string, input: Record<string, unknown>) => request<{ paymentId: string; status: string }>(`/api/v1/orders/${orderId}/payments`, { method: "POST", body: JSON.stringify(input) });
 export const getPendingPayments = () => request<{ payments: Payment[] }>("/api/v1/finance/payments/pending");
 export const reviewPayment = (paymentId: string, input: Record<string, unknown>) => request<{ orderId: string; orderPaymentStatus: string; orderStatus: string }>(`/api/v1/finance/payments/${paymentId}/review`, { method: "POST", body: JSON.stringify(input) });
+export const getPendingRefunds = () => request<{ refunds: Refund[] }>("/api/v1/finance/refunds/pending");
+export const reviewRefund = (refundId: string, input: Record<string, unknown>) => request<{ orderId: string; status: string }>(`/api/v1/finance/refunds/${refundId}/review`, { method: "POST", body: JSON.stringify(input) });
+export const getReconciliation = () => request<{ orders: ReconciliationRow[] }>("/api/v1/finance/reconciliation");
+export const getOrderTimeline = (orderId: string) => request<{ events: TimelineEvent[] }>(`/api/v1/orders/${orderId}/timeline`);
+export const createRefund = (orderId: string, input: Record<string, unknown>) => request<{ refundId: string; status: string }>(`/api/v1/orders/${orderId}/refunds`, { method: "POST", body: JSON.stringify(input) });
 export const transitionOrder = (orderId: string, to: string, reason?: string) => request<{ updated: boolean; status: string }>(`/api/v1/orders/${orderId}/transition`, { method: "POST", body: JSON.stringify({ to, reason }) });
 export const createSchedule = (orderId: string, input: Record<string, unknown>) => request<{ scheduleId: string; taskId: string; idempotencyKey: string }>(`/api/v1/orders/${orderId}/schedules`, { method: "POST", body: JSON.stringify(input) });
-export async function getSchedules(): Promise<{ schedules: Schedule[] }> {
-  const response = await request<{ schedules: Array<Record<string, unknown>> }>("/api/v1/schedules");
-  return { schedules: response.schedules.map((schedule) => ({
-    ...schedule,
-    scheduled_at: schedule.scheduled_at ?? schedule.startAt,
-    created_at: schedule.created_at ?? schedule.createdAt,
-  } as Schedule)) };
-}
-export async function getPublishTasks(): Promise<{ tasks: PublishTask[] }> {
-  const response = await request<{ tasks: Array<Record<string, unknown>> }>("/api/v1/publish-tasks");
-  return { tasks: response.tasks.map((task) => ({
-    ...task,
-    attempt_count: task.attempt_count ?? task.attempts,
-    scheduled_at: task.scheduled_at ?? task.availableAt,
-    last_error: task.last_error ?? task.lastErrorMessage,
-  } as PublishTask)) };
-}
+export async function getSchedules(): Promise<{ schedules: Schedule[] }> { const response = await request<{ schedules: Array<Record<string, unknown>> }>("/api/v1/schedules"); return { schedules: response.schedules.map((schedule) => ({ ...schedule, scheduled_at: schedule.scheduled_at ?? schedule.startAt, created_at: schedule.created_at ?? schedule.createdAt } as Schedule)) }; }
+export async function getPublishTasks(): Promise<{ tasks: PublishTask[] }> { const response = await request<{ tasks: Array<Record<string, unknown>> }>("/api/v1/publish-tasks"); return { tasks: response.tasks.map((task) => ({ ...task, attempt_count: task.attempt_count ?? task.attempts, scheduled_at: task.scheduled_at ?? task.availableAt, last_error: task.last_error ?? task.lastErrorMessage } as PublishTask)) }; }
 export const getOperationsSummary = () => request<OperationsSummary>("/api/v1/operations/summary");
 export const retryPublishTask = (taskId: string) => request<{ retried: boolean; status: string }>(`/api/v1/publish-tasks/${taskId}/retry`, { method: "POST" });
 export const cancelPublishTask = (taskId: string) => request<{ cancelled: boolean; status: string }>(`/api/v1/publish-tasks/${taskId}/cancel`, { method: "POST" });
