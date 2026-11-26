@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { app, parseStartCommand } from "../apps/api/src/app";
-import { MemoryWebhookUpdateStore, validateTelegramInitData, validateWebhookSecret } from "@tg-ad-manager/telegram";
+import { D1ReplayStore, MemoryWebhookUpdateStore, validateTelegramInitData, validateWebhookSecret } from "@tg-ad-manager/telegram";
 
 function createSignedInitData(botToken: string, authDate: number): string {
   const params = new URLSearchParams({
@@ -46,6 +46,36 @@ describe("Telegram Mini App authentication", () => {
     expect(first.valid).toBe(true);
     expect(second.reason).toBe("replay");
     expect(await store.claim({ update_id: 1 })).toEqual({ accepted: true, duplicate: false });
+  });
+
+  it("allows the same valid D1 initData to be retried by the same user", async () => {
+    const rows = new Map<string, { replay_key: string; telegram_user_id: string; expires_at: number }>();
+    const db = {
+      prepare(query: string) {
+        return {
+          bind(...values: unknown[]) {
+            return {
+              async run() {
+                const key = String(values[0]);
+                if (rows.has(key)) return { meta: { changes: 0 } };
+                rows.set(key, { replay_key: key, telegram_user_id: String(values[1]), expires_at: Number(values[3]) });
+                return { meta: { changes: 1 } };
+              },
+              async first<T>() {
+                if (!query.includes("telegram_user_id")) return null;
+                const row = rows.get(String(values[0]));
+                return row && row.telegram_user_id === String(values[1]) && row.expires_at > Math.floor(Date.now() / 1000) ? row as T : null;
+              },
+            };
+          },
+        };
+      },
+    };
+    const store = new D1ReplayStore(db);
+    const record = { replayKey: "same-init-data", userId: "123456789", authDate: Math.floor(Date.now() / 1000), expiresAt: Math.floor(Date.now() / 1000) + 300 };
+    expect(await store.claim(record)).toBe(true);
+    expect(await store.claim(record)).toBe(true);
+    expect(await store.claim({ ...record, userId: "987654321" })).toBe(false);
   });
 });
 

@@ -62,7 +62,17 @@ export class ProductionD1WebhookUpdateStore implements WebhookUpdateStore {
 
 export class D1ReplayStore {
   constructor(private readonly db: D1Like) {}
-  async claim(record: { replayKey: string; userId: string; authDate: number; expiresAt: number }): Promise<boolean> { const result = await this.db.prepare(`INSERT OR IGNORE INTO telegram_init_data_replays (replay_key, telegram_user_id, auth_date, expires_at, created_at) VALUES (?, ?, ?, ?, ?)`).bind(record.replayKey, record.userId, record.authDate, record.expiresAt, new Date().toISOString()).run(); return (result.meta?.changes ?? 0) > 0; }
+  async claim(record: { replayKey: string; userId: string; authDate: number; expiresAt: number }): Promise<boolean> {
+    const result = await this.db.prepare(`INSERT OR IGNORE INTO telegram_init_data_replays (replay_key, telegram_user_id, auth_date, expires_at, created_at) VALUES (?, ?, ?, ?, ?)`).bind(record.replayKey, record.userId, record.authDate, record.expiresAt, new Date().toISOString()).run();
+    if ((result.meta?.changes ?? 0) > 0) return true;
+
+    // Telegram Web Apps may retry the same signed initData after a lost response
+    // or a page refresh. Signature and expiry validation already ran before this
+    // method, so the exact same payload is safe to authenticate idempotently for
+    // the same user while its replay record remains valid.
+    const existing = await this.db.prepare("SELECT replay_key FROM telegram_init_data_replays WHERE replay_key = ? AND telegram_user_id = ? AND expires_at > ?").bind(record.replayKey, record.userId, Math.floor(Date.now() / 1000)).first<{ replay_key: string }>();
+    return Boolean(existing);
+  }
   async has(replayKey: string): Promise<boolean> { const row = await this.db.prepare("SELECT replay_key FROM telegram_init_data_replays WHERE replay_key = ? AND expires_at > ?").bind(replayKey, Math.floor(Date.now() / 1000)).first<{ replay_key: string }>(); return Boolean(row); }
   async put(record: { replayKey: string; userId: string; authDate: number; expiresAt: number }): Promise<void> { await this.db.prepare(`INSERT INTO telegram_init_data_replays (replay_key, telegram_user_id, auth_date, expires_at, created_at) VALUES (?, ?, ?, ?, ?)`).bind(record.replayKey, record.userId, record.authDate, record.expiresAt, new Date().toISOString()).run(); }
 }
