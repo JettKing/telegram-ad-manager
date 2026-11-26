@@ -22,6 +22,7 @@ import { parseCheckoutInput, parseCheckoutReviewInput, SubscriptionRepository } 
 
 export interface R2BucketLike {
   put(key: string, value: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string, options?: { httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string> }): Promise<unknown>;
+  get?(key: string): Promise<{ body?: ReadableStream; httpMetadata?: { contentType?: string }; httpEtag?: string } | null>;
 }
 
 export interface ApiBindings {
@@ -319,6 +320,19 @@ app.get("/api/v1/orders/:orderId/timeline", requireAuth("order:read"), async (co
   if (!env.DB || !auth || !productionContract(env)) return context.json(failure("TIMELINE_NOT_CONFIGURED", "生产订单时间线上下文尚未配置", requestId(context)), 503);
   try { return context.json(success({ events: await new ProductionPaymentRepository(env.DB).timeline({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, context.req.param("orderId")) }, requestId(context))); }
   catch (error) { return businessError(context, error, requestId(context)); }
+});
+
+app.get("/api/v1/payments/proofs/:proofId", requireAuth("finance:read"), async (context) => {
+  const env = runtimeEnv(context.env); const auth = context.get("auth"); const proofId = context.req.param("proofId");
+  if (!env.DB || !auth || !env.R2_BUCKET?.get) return context.json(failure("PAYMENT_PROOF_NOT_CONFIGURED", "付款凭证下载存储尚未配置", requestId(context)), 503);
+  try {
+    const proof = await env.DB.prepare("SELECT object_key, file_name, mime_type, status FROM payment_proof_uploads WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status = 'ready' LIMIT 1").bind(proofId, auth.tenantId, auth.workspaceId).first<{ object_key: string; file_name: string; mime_type: string; status: string }>();
+    if (!proof) return context.json(failure("PAYMENT_PROOF_NOT_FOUND", "付款凭证不存在或不属于当前工作空间", requestId(context)), 404);
+    const object = await env.R2_BUCKET.get(proof.object_key);
+    if (!object?.body) return context.json(failure("PAYMENT_PROOF_OBJECT_NOT_FOUND", "付款凭证文件已不存在", requestId(context)), 404);
+    const safeName = proof.file_name.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120) || "payment-proof";
+    return new Response(object.body, { headers: { "Content-Type": object.httpMetadata?.contentType || proof.mime_type, "Content-Disposition": `inline; filename="${safeName}"`, "Cache-Control": "private, no-store", ...(object.httpEtag ? { ETag: object.httpEtag } : {}) } });
+  } catch (error) { return businessError(context, error, requestId(context)); }
 });
 
 app.post("/api/v1/payments/proofs/upload", requireAuth("order:write"), async (context) => {
