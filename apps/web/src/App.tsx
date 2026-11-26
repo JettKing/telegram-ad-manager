@@ -49,6 +49,14 @@ function App() {
 
   useEffect(() => { const controller = new AbortController(); getHealth(controller.signal).then((r) => r.ok && setHealth(r.data)).catch(() => undefined); authenticate().then(setAuth).catch((e) => setError(e instanceof ApiError ? `[${e.code}] ${e.message}` : e instanceof Error ? e.message : "Telegram 登录失败")).finally(() => setLoading(false)); return () => controller.abort(); }, []);
   useEffect(() => { if (auth) void loadData(); }, [auth]);
+  useEffect(() => {
+    document.documentElement.classList.toggle("mobile-drawer-open", mobileOpen);
+    document.body.classList.toggle("mobile-drawer-open", mobileOpen);
+    return () => {
+      document.documentElement.classList.remove("mobile-drawer-open");
+      document.body.classList.remove("mobile-drawer-open");
+    };
+  }, [mobileOpen]);
 
   if (loading) return <div className="center-state"><div className="loader" /><strong>正在连接 TG Ad Manager</strong><span>验证 Telegram 身份并加载工作空间…</span></div>;
   if (!auth) return <div className="center-state auth-state"><div className="brand-mark">TG</div><h1>TG Ad Manager</h1><p>{error || "请从 Telegram Bot 的“进入广告管理”按钮打开此 Mini App。"}</p><button className="primary-button" onClick={() => window.location.reload()}>重新连接</button></div>;

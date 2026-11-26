@@ -115,18 +115,23 @@ input:focus, select:focus, textarea:focus { border-color: rgba(20,126,245,.52); 
   .sidebar {
     top: 0;
     bottom: 0;
-    left: -292px;
+    left: 0;
     width: min(276px, 85vw);
     height: 100vh;
     min-height: 100vh;
     height: 100dvh;
     min-height: 100dvh;
+    height: var(--tg-viewport-height, 100dvh);
+    min-height: 0;
+    max-height: var(--tg-viewport-height, 100dvh);
+    transform: translateX(-100%);
+    transition: transform .22s ease;
     overflow-x: hidden;
     overflow-y: auto;
     overscroll-behavior-y: contain;
     -webkit-overflow-scrolling: touch;
-    padding-top: calc(26px + env(safe-area-inset-top, 0px));
-    padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+    padding-top: calc(26px + max(env(safe-area-inset-top, 0px), var(--app-safe-area-top, 0px)));
+    padding-bottom: calc(18px + max(env(safe-area-inset-bottom, 0px), var(--app-safe-area-bottom, 0px)));
     box-shadow: 18px 0 44px rgba(18, 38, 72, .28);
   }
   .topbar { height: 64px; padding: 0 15px; }
@@ -150,5 +155,14 @@ input:focus, select:focus, textarea:focus { border-color: rgba(20,126,245,.52); 
 
 /* Keep the drawer toggle above the mobile closed-state rule. */
 @media (max-width: 720px) {
-  .sidebar.sidebar-open { left: 0; }
+  html, body, #root { min-height: var(--tg-viewport-height, 100dvh); }
+  body { overflow-x: hidden; }
+  html.mobile-drawer-open, body.mobile-drawer-open {
+    background: #101a31 !important;
+    background-image: none !important;
+    overflow: hidden !important;
+    overscroll-behavior: none;
+  }
+  .sidebar.sidebar-open { left: 0; transform: translateX(0); }
+  .mobile-backdrop { height: var(--tg-viewport-height, 100dvh); overscroll-behavior: contain; }
 }
