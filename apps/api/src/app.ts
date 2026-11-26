@@ -293,6 +293,13 @@ app.get("/api/v1/finance/refunds/pending", requireAuth("finance:read"), async (c
   return context.json(success({ refunds: await paymentRepository(env.DB, env).listPendingRefunds(auth.tenantId, auth.workspaceId) }, requestId(context)));
 });
 
+app.get("/api/v1/finance/reconciliation", requireAuth("finance:read"), async (context) => {
+  const env = runtimeEnv(context.env); const auth = context.get("auth");
+  if (!env.DB || !auth || !productionContract(env)) return context.json(failure("FINANCE_NOT_CONFIGURED", "生产财务对账上下文尚未配置", requestId(context)), 503);
+  try { return context.json(success({ orders: await new ProductionPaymentRepository(env.DB).reconciliation(auth.tenantId, auth.workspaceId) }, requestId(context))); }
+  catch (error) { return businessError(context, error, requestId(context)); }
+});
+
 app.get("/api/v1/orders/:orderId/payments", requireAuth("order:read"), async (context) => {
   const env = runtimeEnv(context.env);
   const auth = context.get("auth");
@@ -301,6 +308,13 @@ app.get("/api/v1/orders/:orderId/payments", requireAuth("order:read"), async (co
     const payments = await paymentRepository(env.DB, env).listOrderPayments({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, context.req.param("orderId"));
     return context.json(success({ payments }, requestId(context)));
   } catch (error) { return businessError(context, error, requestId(context)); }
+});
+
+app.get("/api/v1/orders/:orderId/timeline", requireAuth("order:read"), async (context) => {
+  const env = runtimeEnv(context.env); const auth = context.get("auth");
+  if (!env.DB || !auth || !productionContract(env)) return context.json(failure("TIMELINE_NOT_CONFIGURED", "生产订单时间线上下文尚未配置", requestId(context)), 503);
+  try { return context.json(success({ events: await new ProductionPaymentRepository(env.DB).timeline({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, context.req.param("orderId")) }, requestId(context))); }
+  catch (error) { return businessError(context, error, requestId(context)); }
 });
 
 app.post("/api/v1/orders/:orderId/payments", requireAuth("order:write"), async (context) => {
