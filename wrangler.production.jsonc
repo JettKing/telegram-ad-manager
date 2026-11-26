@@ -9,6 +9,9 @@
     "D1_SCHEMA_CONTRACT": "production-0009",
     "WEB_APP_ORIGIN": "https://telegram-ad-manager.pages.dev"
   },
+  "r2_buckets": [
+    { "binding": "R2_BUCKET", "bucket_name": "tg-ad-manager-payment-proofs" }
+  ],
   "d1_databases": [
     {
       "binding": "DB",

@@ -36,6 +36,7 @@ export const getOrders = () => request<{ orders: Order[] }>("/api/v1/orders");
 export const createOrder = (input: Record<string, unknown>) => request<{ orderId: string; orderNo: string; receivableMinor: number }>("/api/v1/orders", { method: "POST", body: JSON.stringify(input) });
 export const submitOrder = (orderId: string) => request<{ updated: boolean; status: string }>(`/api/v1/orders/${orderId}/submit`, { method: "POST" });
 export const createPayment = (orderId: string, input: Record<string, unknown>) => request<{ paymentId: string; status: string }>(`/api/v1/orders/${orderId}/payments`, { method: "POST", body: JSON.stringify(input) });
+export const uploadPaymentProof = (file: File) => { const form = new FormData(); form.append("file", file); return request<{ proofAssetId: string; fileName: string; mimeType: string; fileSize: number; status: string }>("/api/v1/payments/proofs/upload", { method: "POST", body: form }); };
 export const getPendingPayments = () => request<{ payments: Payment[] }>("/api/v1/finance/payments/pending");
 export const reviewPayment = (paymentId: string, input: Record<string, unknown>) => request<{ orderId: string; orderPaymentStatus: string; orderStatus: string }>(`/api/v1/finance/payments/${paymentId}/review`, { method: "POST", body: JSON.stringify(input) });
 export const getPendingRefunds = () => request<{ refunds: Refund[] }>("/api/v1/finance/refunds/pending");

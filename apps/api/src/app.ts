@@ -20,6 +20,10 @@ import { ProductionOperationsRepository } from "./production-operations.js";
 import { processNotificationOutbox, raiseOperationalAlert } from "./production-operations.js";
 import { parseCheckoutInput, parseCheckoutReviewInput, SubscriptionRepository } from "./subscription.js";
 
+export interface R2BucketLike {
+  put(key: string, value: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string, options?: { httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string> }): Promise<unknown>;
+}
+
 export interface ApiBindings {
   DB?: D1Like;
   TELEGRAM_BOT_TOKEN?: string;
@@ -28,7 +32,7 @@ export interface ApiBindings {
   TELEGRAM_API_BASE_URL?: string;
   D1_SCHEMA_CONTRACT?: string;
   DATABASE_URL?: string;
-  R2_BUCKET?: string;
+  R2_BUCKET?: R2BucketLike;
   SESSION_SECRET?: string;
   SESSION_TTL_SECONDS?: string;
   PLATFORM_ADMIN_TELEGRAM_IDS?: string;
@@ -48,7 +52,7 @@ function dependencyState(value: string | undefined, fallback: ServiceState = "no
 }
 
 function defaultRuntimeEnv(): ApiBindings {
-  return typeof process !== "undefined" ? process.env : {};
+  return (typeof process !== "undefined" ? process.env : {}) as unknown as ApiBindings;
 }
 
 function runtimeEnv(bindings: ApiBindings | undefined): ApiBindings {
@@ -104,7 +108,7 @@ export function healthPayload(env: ApiBindings = defaultRuntimeEnv()): HealthPay
     dependencies: {
       database: dependencyState(current.DATABASE_URL),
       telegram: telegramServiceState(current.TELEGRAM_BOT_TOKEN),
-      r2: dependencyState(current.R2_BUCKET),
+      r2: current.R2_BUCKET ? "configured" : "not_configured",
     },
   };
 }
@@ -315,6 +319,22 @@ app.get("/api/v1/orders/:orderId/timeline", requireAuth("order:read"), async (co
   if (!env.DB || !auth || !productionContract(env)) return context.json(failure("TIMELINE_NOT_CONFIGURED", "生产订单时间线上下文尚未配置", requestId(context)), 503);
   try { return context.json(success({ events: await new ProductionPaymentRepository(env.DB).timeline({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, context.req.param("orderId")) }, requestId(context))); }
   catch (error) { return businessError(context, error, requestId(context)); }
+});
+
+app.post("/api/v1/payments/proofs/upload", requireAuth("order:write"), async (context) => {
+  const env = runtimeEnv(context.env); const auth = context.get("auth");
+  if (!env.DB || !auth || !env.R2_BUCKET) return context.json(failure("PAYMENT_PROOF_NOT_CONFIGURED", "付款凭证上传存储尚未配置", requestId(context)), 503);
+  try {
+    const form = await context.req.raw.formData(); const candidate = form.get("file");
+    if (!(candidate instanceof File)) throw new BusinessValidationError("PAYMENT_PROOF_FILE_REQUIRED", "请选择付款凭证文件");
+    const allowed = new Set(["image/jpeg", "image/png", "image/webp", "application/pdf"]);
+    if (!allowed.has(candidate.type)) throw new BusinessValidationError("PAYMENT_PROOF_TYPE_NOT_ALLOWED", "付款凭证仅支持 JPG、PNG、WebP 或 PDF");
+    if (candidate.size <= 0 || candidate.size > 10 * 1024 * 1024) throw new BusinessValidationError("PAYMENT_PROOF_SIZE_INVALID", "付款凭证大小必须在 1B 到 10MB 之间");
+    const id = crypto.randomUUID(); const original = candidate.name.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120) || "proof"; const objectKey = `${auth.tenantId}/${auth.workspaceId}/${id}-${original}`; const now = new Date().toISOString();
+    await env.R2_BUCKET.put(objectKey, candidate.stream(), { httpMetadata: { contentType: candidate.type }, customMetadata: { tenantId: auth.tenantId, workspaceId: auth.workspaceId, uploadedBy: auth.userId, purpose: "payment_proof" } });
+    await env.DB.prepare("INSERT INTO payment_proof_uploads (id, tenant_id, workspace_id, object_key, file_name, mime_type, file_size, status, uploaded_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?)").bind(id, auth.tenantId, auth.workspaceId, objectKey, original, candidate.type, candidate.size, auth.userId, now).run();
+    return context.json(success({ proofAssetId: id, fileName: original, mimeType: candidate.type, fileSize: candidate.size, status: "ready" }, requestId(context)), 201);
+  } catch (error) { return businessError(context, error, requestId(context)); }
 });
 
 app.post("/api/v1/orders/:orderId/payments", requireAuth("order:write"), async (context) => {
