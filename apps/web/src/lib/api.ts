@@ -26,6 +26,7 @@ export type Package = { id: string; name: string; description?: string; ad_type:
 export type Order = { id: string; order_no: string; customer_id: string; channel_id: string; package_id: string; receivable_minor: number; payment_status: string; status: string; content_json: string; created_at: string; updated_at: string };
 export type Schedule = { id: string; order_id: string; scheduled_at: string; status: string; created_at: string } & Record<string, unknown>;
 export type PublishTask = { id: string; order_id: string; status: string; attempt_count: number; scheduled_at?: string; last_error?: string } & Record<string, unknown>;
+export type Payment = { id: string; order_id: string; method: string; amount_minor: number; transaction_ref?: string; proof_asset_id?: string; status: string; reviewed_by?: string; reviewed_at?: string; review_note?: string; created_at: string };
 
 export class ApiError extends Error {
   constructor(public readonly code: string, message: string, public readonly status: number) { super(message); }
@@ -82,6 +83,11 @@ export const getPackages = () => request<{ packages: Package[] }>("/api/v1/packa
 export const createPackage = (input: Record<string, unknown>) => request<{ packageId: string }>("/api/v1/packages", { method: "POST", body: JSON.stringify(input) });
 export const getOrders = () => request<{ orders: Order[] }>("/api/v1/orders");
 export const createOrder = (input: Record<string, unknown>) => request<{ orderId: string; orderNo: string; receivableMinor: number }>("/api/v1/orders", { method: "POST", body: JSON.stringify(input) });
+export const submitOrder = (orderId: string) => request<{ updated: boolean; status: string }>(`/api/v1/orders/${orderId}/submit`, { method: "POST" });
+export const createPayment = (orderId: string, input: Record<string, unknown>) => request<{ paymentId: string; status: string }>(`/api/v1/orders/${orderId}/payments`, { method: "POST", body: JSON.stringify(input) });
+export const getPendingPayments = () => request<{ payments: Payment[] }>("/api/v1/finance/payments/pending");
+export const reviewPayment = (paymentId: string, input: Record<string, unknown>) => request<{ orderId: string; orderPaymentStatus: string; orderStatus: string }>(`/api/v1/finance/payments/${paymentId}/review`, { method: "POST", body: JSON.stringify(input) });
+export const transitionOrder = (orderId: string, to: string, reason?: string) => request<{ updated: boolean; status: string }>(`/api/v1/orders/${orderId}/transition`, { method: "POST", body: JSON.stringify({ to, reason }) });
 export const createSchedule = (orderId: string, input: Record<string, unknown>) => request<{ scheduleId: string; taskId: string; idempotencyKey: string }>(`/api/v1/orders/${orderId}/schedules`, { method: "POST", body: JSON.stringify(input) });
 export async function getSchedules(): Promise<{ schedules: Schedule[] }> {
   const response = await request<{ schedules: Array<Record<string, unknown>> }>("/api/v1/schedules");

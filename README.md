@@ -4,7 +4,7 @@ TG Ad Manager 是 Telegram 广告管理 SaaS 的工程基线，按多租户、�
 
 ## 当前阶段
 
-已完成 Cloudflare 账户、D1、Queue 和 Worker 资源的只读审计，并确认目标 D1 已存在独立 production schema。发布 Cron 已支持通过 `D1_SCHEMA_CONTRACT=production-0008` 选择生产发布适配器，适配 `publish_tasks`、`publish_task_logs`、`ad_schedules`、`creative_media` 和 `telegram_channel_permissions`。
+已完成 Cloudflare 账户、D1、Queue 和 Worker 资源的只读审计，并确认目标 D1 已存在独立 production schema。发布 Cron 已支持通过 `D1_SCHEMA_CONTRACT=production-0009` 选择生产发布适配器，适配 `publish_tasks`、`publish_task_logs`、`ad_schedules`、`creative_media` 和 `telegram_channel_permissions`。生产增量迁移维护在 `apps/api/production-migrations/`，不等同于开发迁移目录。
 
 当前没有把未配置的 Telegram、Cloudflare Worker、Queues、Cron、R2 或订单/收入数据伪装成已完成。认证、媒体、CRM、付款等 API 仍需继续适配生产 schema，真实外部联调按 `TODO.md` 分阶段推进。
 

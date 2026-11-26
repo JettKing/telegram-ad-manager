@@ -67,6 +67,12 @@ function paymentRepository(db: D1Like, env: ApiBindings) { return productionCont
 function publishRepository(db: D1Like, env: ApiBindings) { return productionContract(env) ? new ProductionPublishRepository(db) : new D1PublishRepository(db); }
 function subscriptionRepository(db: D1Like): SubscriptionRepository { return new SubscriptionRepository(db); }
 
+function requiredTransitionPermission(to: OrderStatus): Permission | null {
+  if (["paid", "approved", "refunded", "partially_refunded"].includes(to)) return "finance:write";
+  if (["scheduled", "publishing", "published", "completed"].includes(to)) return "publish:write";
+  return null;
+}
+
 export function parseStartCommand(value: unknown): { chatId: string; payload?: string } | null {
   if (!value || typeof value !== "object") return null;
   const message = (value as Record<string, unknown>).message;
@@ -412,7 +418,7 @@ app.post("/api/v1/orders/:orderId/submit", requireAuth("order:write"), async (co
 app.post("/api/v1/orders/:orderId/transition", requireAuth("order:write"), async (context) => {
   const env = runtimeEnv(context.env); const auth = context.get("auth");
   if (!env.DB || !auth) return context.json(failure("ORDER_NOT_CONFIGURED", "订单数据库上下文尚未配置", requestId(context)), 503);
-  try { const body = await context.req.json() as Record<string, unknown>; const to = body.to; if (typeof to !== "string" || !["pending_payment", "paid", "pending_review", "approved", "scheduled", "publishing", "published", "completed", "cancelled", "refunded", "partially_refunded", "failed"].includes(to)) throw new BusinessValidationError("INVALID_ORDER_STATUS", "订单目标状态不合法"); const updated = await businessRepository(env.DB, env).transitionOrder({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("orderId"), to as OrderStatus, typeof body.reason === "string" ? body.reason : "status_changed", new Date().toISOString()); return context.json(success({ updated, status: to }, requestId(context))); }
+  try { const body = await context.req.json() as Record<string, unknown>; const to = body.to; if (typeof to !== "string" || !["pending_payment", "paid", "pending_review", "approved", "scheduled", "publishing", "published", "completed", "cancelled", "refunded", "partially_refunded", "failed"].includes(to)) throw new BusinessValidationError("INVALID_ORDER_STATUS", "订单目标状态不合法"); const permission = requiredTransitionPermission(to as OrderStatus); if (permission && !hasPermission(auth.role, permission)) return context.json(failure("ORDER_TRANSITION_FORBIDDEN", `订单状态 ${to} 只能由具备 ${permission} 权限的角色推进`, requestId(context)), 403); const updated = await businessRepository(env.DB, env).transitionOrder({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("orderId"), to as OrderStatus, typeof body.reason === "string" ? body.reason : "status_changed", new Date().toISOString()); return context.json(success({ updated, status: to }, requestId(context))); }
   catch (error) { return businessError(context, error, requestId(context)); }
 });
 
