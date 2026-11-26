@@ -131,3 +131,8 @@ input:focus, select:focus, textarea:focus { border-color: rgba(20,126,245,.52); 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* Keep the drawer toggle above the mobile closed-state rule. */
+@media (max-width: 720px) {
+  .sidebar.sidebar-open { left: 0; }
+}
