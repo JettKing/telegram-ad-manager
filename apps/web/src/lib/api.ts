@@ -17,6 +17,7 @@ export type Payment = { id: string; order_id: string; method: string; amount_min
 export type Refund = { id: string; order_id: string; amount_minor: number; reason: string; method?: string; transaction_ref?: string; status: string; requested_by?: string; reviewed_by?: string; reviewed_at?: string; review_note?: string; created_at: string };
 export type ReconciliationRow = { orderId: string; orderNo: string; dueMinor: number; approvedPaymentMinor: number; approvedRefundMinor: number; paymentStatus: string; status: string };
 export type TimelineEvent = { createdAt: string; type: string; objectId?: string; details?: string; status?: string; amountMinor?: number; reason?: string; entryType?: string; direction?: string; transactionRef?: string };
+export type ExpirationFailure = { id: string; orderId: string; taskId: string; channelId: string; telegramChatId: string; status: string; attempts: number; nextAttemptAt?: string; lastError?: string; firstFailedAt?: string; lastAttemptAt?: string; resolvedAt?: string; resolutionNote?: string };
 export type OperationsSummary = { taskCounts: Record<string, number>; staleProcessing: number; openAlerts: number; latestCron?: { status: string; checkedAt: string; details: Record<string, unknown> } };
 
 export class ApiError extends Error { constructor(public readonly code: string, message: string, public readonly status: number) { super(message); } }
@@ -49,6 +50,9 @@ export const createSchedule = (orderId: string, input: Record<string, unknown>) 
 export async function getSchedules(): Promise<{ schedules: Schedule[] }> { const response = await request<{ schedules: Array<Record<string, unknown>> }>("/api/v1/schedules"); return { schedules: response.schedules.map((schedule) => ({ ...schedule, scheduled_at: schedule.scheduled_at ?? schedule.startAt, created_at: schedule.created_at ?? schedule.createdAt } as Schedule)) }; }
 export async function getPublishTasks(): Promise<{ tasks: PublishTask[] }> { const response = await request<{ tasks: Array<Record<string, unknown>> }>("/api/v1/publish-tasks"); return { tasks: response.tasks.map((task) => ({ ...task, attempt_count: task.attempt_count ?? task.attempts, scheduled_at: task.scheduled_at ?? task.availableAt, last_error: task.last_error ?? task.lastErrorMessage } as PublishTask)) }; }
 export const getOperationsSummary = () => request<OperationsSummary>("/api/v1/operations/summary");
+export const getExpirationFailures = () => request<{ failures: ExpirationFailure[] }>("/api/v1/expiration-failures");
+export const retryExpirationFailure = (failureId: string) => request<{ retried: boolean; status: string }>(`/api/v1/expiration-failures/${failureId}/retry`, { method: "POST" });
+export const acknowledgeExpirationFailure = (failureId: string, note?: string) => request<{ acknowledged: boolean; status: string }>(`/api/v1/expiration-failures/${failureId}/acknowledge`, { method: "POST", body: JSON.stringify({ note }) });
 export const configureTelegramAlerts = (chatId: string) => request<{ configured: boolean; channelType: string }>("/api/v1/operations/notification-channels/telegram", { method: "POST", body: JSON.stringify({ chatId }) });
 export const retryPublishTask = (taskId: string) => request<{ retried: boolean; status: string }>(`/api/v1/publish-tasks/${taskId}/retry`, { method: "POST" });
 export const cancelPublishTask = (taskId: string) => request<{ cancelled: boolean; status: string }>(`/api/v1/publish-tasks/${taskId}/cancel`, { method: "POST" });
