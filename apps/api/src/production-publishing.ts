@@ -3,6 +3,7 @@ import { BusinessValidationError } from "./business.js";
 import { TelegramApiError, TelegramBotApiClient } from "./channels.js";
 import { classifyPublishError, PublishError, retryDelaySeconds, TelegramPublisher, type AssetRow, type PublishContent, type ScheduleType } from "./publishing.js";
 import { raiseOperationalAlert } from "./production-operations.js";
+import { enqueueCustomerNotification } from "./production-customer-notifications.js";
 
 export interface ProductionScheduleInput {
   scheduleType: ScheduleType;
@@ -185,7 +186,7 @@ export class ProductionPublishRepository {
   async markExpired(expiration: ProductionExpiration, result: "succeeded" | "failed", now: string, errorMessage?: string): Promise<void> {
     if (result === "succeeded") {
       await this.db.prepare("UPDATE ad_orders SET status = 'completed', updated_at = ? WHERE id = ? AND status = 'published'").bind(now, expiration.order_id).run();
-      await this.db.prepare("UPDATE publish_expiration_failures SET status = 'succeeded', resolved_at = ?, last_attempt_at = ?, updated_at = ? WHERE task_id = ? AND status NOT IN ('succeeded', 'acknowledged')").bind(now, now, now, expiration.task_id).run();
+      await this.db.prepare("UPDATE publish_expiration_failures SET status = 'succeeded', resolved_at = ?, last_attempt_at = ?, updated_at = ? WHERE task_id = ? AND status NOT IN ('succeeded', 'acknowledged')").bind(now, now, now, expiration.task_id).run(); await enqueueCustomerNotification(this.db, { tenantId: expiration.tenant_id, workspaceId: expiration.workspace_id, orderId: expiration.order_id, event: "ad_expired", objectId: expiration.task_id, now });
     } else {
       const existing = await this.db.prepare("SELECT id, attempts FROM publish_expiration_failures WHERE task_id = ? LIMIT 1").bind(expiration.task_id).first<{ id: string; attempts: number }>();
       const attempts = Number(existing?.attempts ?? 0) + 1;

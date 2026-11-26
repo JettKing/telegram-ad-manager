@@ -18,6 +18,7 @@ import { ProductionBusinessRepository } from "./production-business.js";
 import { ProductionPaymentRepository } from "./production-payments.js";
 import { ProductionOperationsRepository } from "./production-operations.js";
 import { processNotificationOutbox, raiseOperationalAlert } from "./production-operations.js";
+import { enqueueCustomerNotification } from "./production-customer-notifications.js";
 import { parseCheckoutInput, parseCheckoutReviewInput, SubscriptionRepository } from "./subscription.js";
 
 export interface R2BucketLike {
@@ -356,7 +357,7 @@ app.post("/api/v1/orders/:orderId/payments", requireAuth("order:write"), async (
   const auth = context.get("auth");
   if (!env.DB || !auth) return context.json(failure("PAYMENT_NOT_CONFIGURED", "付款数据库上下文尚未配置", requestId(context)), 503);
   try {
-    const paymentId = await paymentRepository(env.DB, env).createPayment({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("orderId"), parsePaymentInput(await context.req.json()), new Date().toISOString());
+    const now = new Date().toISOString(); const paymentId = await paymentRepository(env.DB, env).createPayment({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("orderId"), parsePaymentInput(await context.req.json()), now); if (productionContract(env)) await enqueueCustomerNotification(env.DB, { tenantId: auth.tenantId, workspaceId: auth.workspaceId, orderId: context.req.param("orderId"), event: "payment_submitted", objectId: paymentId, now });
     return context.json(success({ paymentId, status: "pending_review" }, requestId(context)), 201);
   } catch (error) { return businessError(context, error, requestId(context)); }
 });
@@ -366,7 +367,7 @@ app.post("/api/v1/finance/payments/:paymentId/review", requireAuth("finance:writ
   const auth = context.get("auth");
   if (!env.DB || !auth) return context.json(failure("FINANCE_NOT_CONFIGURED", "财务数据库上下文尚未配置", requestId(context)), 503);
   try {
-    const result = await paymentRepository(env.DB, env).reviewPayment({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("paymentId"), parsePaymentReviewInput(await context.req.json()), new Date().toISOString());
+    const reviewInput = parsePaymentReviewInput(await context.req.json()); const result = await paymentRepository(env.DB, env).reviewPayment({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("paymentId"), reviewInput, new Date().toISOString()); if (productionContract(env) && result.orderId) await enqueueCustomerNotification(env.DB, { tenantId: auth.tenantId, workspaceId: auth.workspaceId, orderId: result.orderId, event: reviewInput.status === "approved" ? "payment_approved" : "payment_rejected", objectId: context.req.param("paymentId"), details: reviewInput.status === "rejected" ? reviewInput.note : undefined });
     return context.json(success(result, requestId(context)));
   } catch (error) { return businessError(context, error, requestId(context)); }
 });
@@ -453,7 +454,7 @@ app.get("/api/v1/orders", requireAuth("order:read"), async (context) => {
 app.post("/api/v1/orders", requireAuth("order:write"), async (context) => {
   const env = runtimeEnv(context.env); const auth = context.get("auth");
   if (!env.DB || !auth) return context.json(failure("ORDER_NOT_CONFIGURED", "订单数据库上下文尚未配置", requestId(context)), 503);
-  try { const body = await context.req.json() as Record<string, unknown>; const now = new Date(); if (!productionContract(env)) await subscriptionRepository(env.DB).assertEntitlementAvailable(auth.tenantId, "monthly_orders", 1, now); const result = await businessRepository(env.DB, env).createOrder({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, { customerId: String(body.customerId ?? ""), channelId: String(body.channelId ?? ""), packageId: String(body.packageId ?? ""), discountMinor: body.discountMinor as number | undefined, content: body.content }, now.toISOString()); if (!productionContract(env)) await subscriptionRepository(env.DB).recordEntitlementUsage(auth.tenantId, "monthly_orders", `order:${result.orderId}`, 1, now); return context.json(success(result, requestId(context)), 201); }
+  try { const body = await context.req.json() as Record<string, unknown>; const now = new Date(); if (!productionContract(env)) await subscriptionRepository(env.DB).assertEntitlementAvailable(auth.tenantId, "monthly_orders", 1, now); const result = await businessRepository(env.DB, env).createOrder({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, { customerId: String(body.customerId ?? ""), channelId: String(body.channelId ?? ""), packageId: String(body.packageId ?? ""), discountMinor: body.discountMinor as number | undefined, content: body.content }, now.toISOString()); if (productionContract(env)) await enqueueCustomerNotification(env.DB, { tenantId: auth.tenantId, workspaceId: auth.workspaceId, orderId: result.orderId, event: "order_created", now: now.toISOString() }); if (!productionContract(env)) await subscriptionRepository(env.DB).recordEntitlementUsage(auth.tenantId, "monthly_orders", `order:${result.orderId}`, 1, now); return context.json(success(result, requestId(context)), 201); }
   catch (error) { return businessError(context, error, requestId(context)); }
 });
 
@@ -555,7 +556,7 @@ app.post("/api/v1/orders/:orderId/schedules", requireAuth("publish:write"), asyn
     const result = productionContract(env)
       ? await new ProductionPublishRepository(env.DB).createSchedule({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, context.req.param("orderId"), parseProductionScheduleInput(raw), new Date().toISOString())
       : await new D1PublishRepository(env.DB).createSchedule({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("orderId"), parseScheduleInput(raw), new Date().toISOString());
-    return context.json(success({ ...result, status: "queued" }, requestId(context)), 201);
+    if (productionContract(env)) await enqueueCustomerNotification(env.DB, { tenantId: auth.tenantId, workspaceId: auth.workspaceId, orderId: context.req.param("orderId"), event: "schedule_confirmed", objectId: result.taskId, now: new Date().toISOString() }); return context.json(success({ ...result, status: "queued" }, requestId(context)), 201);
   } catch (error) { return businessError(context, error, requestId(context)); }
 });
 
