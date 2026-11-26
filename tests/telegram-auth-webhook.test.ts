@@ -10,7 +10,7 @@ function createSignedInitData(botToken: string, authDate: number): string {
     user: JSON.stringify({ id: 123456789, first_name: "Test", username: "tester" }),
   });
   const dataCheckString = [...params.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => `${key}=${value}`).join("\n");
-  const secretKey = createHmac("sha256", botToken).update("WebAppData").digest();
+  const secretKey = createHmac("sha256", "WebAppData").update(botToken).digest();
   const hash = createHmac("sha256", secretKey).update(dataCheckString).digest("hex");
   params.set("hash", hash);
   return params.toString();

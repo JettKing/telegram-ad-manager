@@ -90,7 +90,7 @@ export async function validateTelegramInitData(
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([key, value]) => `${key}=${value}`)
     .join("\n");
-  const secretKey = new Uint8Array(await hmacSha256(new TextEncoder().encode(botToken), new TextEncoder().encode("WebAppData")));
+  const secretKey = new Uint8Array(await hmacSha256(new TextEncoder().encode("WebAppData"), new TextEncoder().encode(botToken)));
   const calculatedHash = bytesToHex(await hmacSha256(secretKey, new TextEncoder().encode(dataCheckString)));
 
   if (!constantTimeHexEqual(calculatedHash, suppliedHash)) return { valid: false, reason: "invalid_signature", authDate, userId: String(user.id) };
