@@ -47,3 +47,10 @@ jobs:
           printf '%s' "$SESSION_SECRET" | npx wrangler secret put SESSION_SECRET --config wrangler.production.jsonc
           printf '%s' "$TELEGRAM_WEBHOOK_SECRET" | npx wrangler secret put TELEGRAM_WEBHOOK_SECRET --config wrangler.production.jsonc
           printf '%s' "$TELEGRAM_BOT_IDENTITY_ID" | npx wrangler secret put TELEGRAM_BOT_IDENTITY_ID --config wrangler.production.jsonc
+
+      - name: Verify Telegram Bot identity without exposing token
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          EXPECTED_TELEGRAM_BOT_USERNAME: TGAdOpsBot
+          EXPECTED_TELEGRAM_BOT_ID: "8600658922"
+        run: pnpm exec tsx scripts/verify-telegram-bot.ts
