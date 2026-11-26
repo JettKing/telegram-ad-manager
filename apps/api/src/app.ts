@@ -254,12 +254,18 @@ app.get("/api/v1/finance/access", requireAuth("finance:read"), (context) => {
   return context.json(success({ authorized: true, tenantId: auth?.tenantId, role: auth?.role }, requestId(context)));
 });
 
-function businessError(context: { json: (body: unknown, status?: number) => Response }, error: unknown, requestIdValue?: string): Response {
+function businessError(context: { json: (body: unknown, status?: number) => Response; req: { path: string; method: string } }, error: unknown, requestIdValue?: string): Response {
   if (error instanceof BusinessValidationError) {
     const status = error.code.endsWith("_NOT_FOUND") || error.code === "ORDER_NOT_FOUND" ? 404 : error.code.includes("TRANSITION") || error.code.includes("LOCKED") || error.code.includes("ALREADY") ? 409 : 400;
     return context.json(failure(error.code, error.message, requestIdValue), status);
   }
-  console.error("business_api_error", { message: error instanceof Error ? error.message : "unknown" });
+  console.error("business_api_error", {
+    requestId: requestIdValue,
+    method: context.req.method,
+    path: context.req.path,
+    errorType: error instanceof Error ? error.name : typeof error,
+    message: error instanceof Error ? error.message : "unknown",
+  });
   return context.json(failure("BUSINESS_OPERATION_FAILED", "业务操作失败", requestIdValue), 503);
 }
 
