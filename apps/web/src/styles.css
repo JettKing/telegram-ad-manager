@@ -112,7 +112,21 @@ input:focus, select:focus, textarea:focus { border-color: rgba(20,126,245,.52); 
 .media-picker-item.selected { border-color: rgba(20,126,245,.5); background: #eef6ff; box-shadow: 0 5px 16px rgba(20,126,245,.08); }
 .order-preview-card { border-color: rgba(20,126,245,.16); border-radius: 16px; background: #eef6ff; }
 @media (max-width: 720px) {
-  .sidebar { left: -292px; width: 276px; box-shadow: 18px 0 44px rgba(18, 38, 72, .28); }
+  .sidebar {
+    top: 0;
+    bottom: 0;
+    left: -292px;
+    width: min(276px, 85vw);
+    height: 100vh;
+    height: 100dvh;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+    padding-top: calc(26px + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+    box-shadow: 18px 0 44px rgba(18, 38, 72, .28);
+  }
   .topbar { height: 64px; padding: 0 15px; }
   .content-wrap { padding: 28px 16px 46px; }
   .page-heading { gap: 12px; margin-bottom: 21px; }
