@@ -39,7 +39,12 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
   const token = sessionToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
   const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers });
-  const payload = await response.json() as ApiResponse<T>;
+  let payload: ApiResponse<T>;
+  try {
+    payload = await response.json() as ApiResponse<T>;
+  } catch {
+    throw new ApiError("INVALID_API_RESPONSE", `API 返回了无法解析的响应（HTTP ${response.status}）`, response.status);
+  }
   if (!response.ok || !payload.ok) {
     const error = payload.ok ? { code: "HTTP_ERROR", message: `服务返回 ${response.status}` } : payload.error;
     throw new ApiError(error.code, error.message, response.status);

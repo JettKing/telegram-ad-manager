@@ -42,7 +42,7 @@ function App() {
     setData(next); setRefreshing(false);
   };
 
-  useEffect(() => { const controller = new AbortController(); getHealth(controller.signal).then((r) => r.ok && setHealth(r.data)).catch(() => undefined); authenticate().then(setAuth).catch((e) => setError(e instanceof Error ? e.message : "Telegram 登录失败")).finally(() => setLoading(false)); return () => controller.abort(); }, []);
+  useEffect(() => { const controller = new AbortController(); getHealth(controller.signal).then((r) => r.ok && setHealth(r.data)).catch(() => undefined); authenticate().then(setAuth).catch((e) => setError(e instanceof ApiError ? `[${e.code}] ${e.message}` : e instanceof Error ? e.message : "Telegram 登录失败")).finally(() => setLoading(false)); return () => controller.abort(); }, []);
   useEffect(() => { if (auth) void loadData(); }, [auth]);
 
   if (loading) return <div className="center-state"><div className="loader" /><strong>正在连接 TG Ad Manager</strong><span>验证 Telegram 身份并加载工作空间…</span></div>;
@@ -57,7 +57,7 @@ function App() {
       <div className="sidebar-footer"><div className="operator-card"><div className="operator-avatar">{auth.user.displayName.slice(0, 1)}</div><div><strong>{auth.user.displayName}</strong><span>已认证 · {auth.role}</span></div></div><button className="nav-item muted" onClick={() => { void logout().finally(() => window.location.reload()); }}><LogOut size={17} /><span>退出登录</span></button></div>
     </aside>
     {mobileOpen && <button className="mobile-backdrop" onClick={() => setMobileOpen(false)} aria-label="关闭导航" />}
-    <main className="main-content"><header className="topbar"><button className="icon-button mobile-menu" onClick={() => setMobileOpen(true)}><Menu size={20} /></button><div className="breadcrumb"><span>运营工作台</span><ChevronRight size={15} /><strong>{current.label}</strong></div><div className="topbar-actions"><div className="connection-pill"><span className={`status-dot ${health?.ok ? "online" : ""}`} />生产 API 已连接</div><div className="profile-chip">{auth.user.displayName.slice(0, 1)}</div></div></header>
+      <main className="main-content"><header className="topbar"><button className="icon-button mobile-menu" onClick={() => setMobileOpen(true)}><Menu size={20} /></button><div className="breadcrumb"><span>运营工作台</span><ChevronRight size={15} /><strong>{current.label}</strong></div><div className="topbar-actions"><div className="connection-pill"><span className={`status-dot ${health?.ok ? "online" : ""}`} />{health?.ok ? "生产 API 已连接" : "生产 API 状态未知"}</div><div className="profile-chip">{auth.user.displayName.slice(0, 1)}</div></div></header>
       <div className="content-wrap"><section className="page-heading"><div><div className="eyebrow">{auth.workspace.name} · 运营工作台</div><h1>{current.label}</h1><p>{pageSubtitle(page)}</p></div><button className="secondary-button" onClick={() => void loadData()} disabled={refreshing}><RefreshCw size={15} className={refreshing ? "spin" : ""} />刷新数据</button></section>{error && <div className="error-banner">{error}</div>}{page === "overview" ? <Overview data={data} onNavigate={choose} /> : <PageContent page={page} data={data} onRefresh={loadData} />}</div>
     </main>
   </div>;

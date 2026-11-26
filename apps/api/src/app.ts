@@ -109,6 +109,18 @@ function failure(code: string, message: string, requestId?: string, details?: Re
   return { ok: false, error: { code, message, ...(details ? { details } : {}), ...(requestId ? { requestId } : {}) } };
 }
 
+function telegramAuthMessage(reason: string | undefined): string {
+  return ({
+    missing: "缺少 Telegram initData，请从 @TGAdOpsBot 的“进入广告管理”按钮打开 Mini App",
+    invalid_format: "Telegram 登录数据格式无效，请关闭 Mini App 后从 Bot 重新打开",
+    invalid_signature: "Telegram 登录签名无效，请从 @TGAdOpsBot 重新打开 Mini App",
+    expired: "Telegram 登录已过期，请关闭 Mini App 后重新打开",
+    replay: "Telegram 登录请求已处理，请关闭 Mini App 后重新打开",
+    not_configured: "Telegram Bot 登录依赖尚未配置",
+    replay_store_unavailable: "Telegram 登录存储暂时不可用，请稍后重试",
+  } as Record<string, string>)[reason ?? ""] ?? "Telegram 身份验证失败，请关闭 Mini App 后重试";
+}
+
 function requestId(context: { res: Response }): string | undefined {
   return context.res.headers.get("x-request-id") ?? undefined;
 }
@@ -173,7 +185,7 @@ app.post("/api/v1/auth/telegram", async (context) => {
   const validation = await validateTelegramInitData(rawInitData, env.TELEGRAM_BOT_TOKEN, { replayStore: new D1ReplayStore(env.DB) });
   if (!validation.valid || !validation.user) {
     const status = validation.reason === "not_configured" || validation.reason === "replay_store_unavailable" ? 503 : 401;
-    return context.json(failure(`TELEGRAM_${validation.reason?.toUpperCase() ?? "INVALID"}`, "Telegram 身份验证失败", requestId(context), { reason: validation.reason }), status);
+    return context.json(failure(`TELEGRAM_${validation.reason?.toUpperCase() ?? "INVALID"}`, telegramAuthMessage(validation.reason), requestId(context), { reason: validation.reason }), status);
   }
   try {
     const identity = await provisionIdentity(env.DB, validation.user, env);
@@ -181,8 +193,8 @@ app.post("/api/v1/auth/telegram", async (context) => {
     const session = await issueSession(env.DB, identity, env.SESSION_SECRET, sessionTtlSeconds(env.SESSION_TTL_SECONDS), env);
     return context.json(success({ authenticated: true, user: { id: identity.userId, telegramUserId: identity.telegramUserId, displayName: identity.displayName }, tenant: { id: identity.tenantId, name: identity.tenantName }, workspace: { id: identity.workspaceId, name: identity.workspaceName }, role: identity.role, session: { token: session.token, expiresAt: session.expiresAt }, authDate: validation.authDate }, requestId(context)));
   } catch (error) {
-    console.error("telegram_identity_provision_error", { message: error instanceof Error ? error.message : "unknown" });
-    return context.json(failure("IDENTITY_PROVISION_FAILED", "用户和平台上下文创建失败", requestId(context)), 503);
+    console.error("telegram_identity_provision_error", { requestId: requestId(context), message: error instanceof Error ? error.message : "unknown" });
+    return context.json(failure("IDENTITY_PROVISION_FAILED", "生产数据库初始化失败，请稍后重试", requestId(context)), 503);
   }
 });
 
