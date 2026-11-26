@@ -7,7 +7,7 @@ import type { AuthData, Channel, Customer, OperationsSummary, Package, Order, Pa
 
 type Page = "overview" | "channels" | "customers" | "packages" | "orders" | "finance" | "settings" | "schedules" | "media" | "publishes";
 const nav: Array<{ id: Page; label: string; icon: typeof LayoutDashboard }> = [
-  { id: "overview", label: "概览", icon: LayoutDashboard }, { id: "settings", label: "告警配置", icon: Bell }, { id: "channels", label: "频道", icon: Radio }, { id: "customers", label: "客户", icon: Users }, { id: "packages", label: "广告套餐", icon: PackageOpen }, { id: "orders", label: "广告订单", icon: Megaphone }, { id: "finance", label: "财务审核", icon: CircleDollarSign }, { id: "schedules", label: "排期日历", icon: CalendarDays }, { id: "media", label: "素材中心", icon: FileImage }, { id: "publishes", label: "发布任务", icon: Send },
+  { id: "overview", label: "概览", icon: LayoutDashboard }, { id: "channels", label: "频道", icon: Radio }, { id: "customers", label: "客户", icon: Users }, { id: "packages", label: "广告套餐", icon: PackageOpen }, { id: "orders", label: "广告订单", icon: Megaphone }, { id: "finance", label: "财务审核", icon: CircleDollarSign }, { id: "schedules", label: "排期日历", icon: CalendarDays }, { id: "media", label: "素材中心", icon: FileImage }, { id: "publishes", label: "发布任务", icon: Send }, { id: "settings", label: "告警配置", icon: Bell },
 ];
 
 type DataState = { channels: Channel[]; customers: Customer[]; packages: Package[]; orders: Order[]; schedules: Schedule[]; tasks: PublishTask[]; media: Record<string, unknown>[]; pendingPayments: Payment[] };
