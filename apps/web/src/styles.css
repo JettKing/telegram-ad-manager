@@ -11,3 +11,31 @@
 .page-heading>div:first-child{flex:1;min-width:0}.page-heading p{max-width:none}
 
 .page-heading p{white-space:nowrap;word-break:keep-all}
+
+/* Responsive hardening: keep the overview subtitle single-line without forcing other pages to overflow. */
+.page-heading p{min-width:0;overflow-wrap:anywhere}
+.page-heading-overview p{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.form-grid select,.form-grid textarea{width:100%;min-width:0;max-width:100%;font:inherit;padding:10px 11px;border:1px solid #dce4ed;border-radius:8px;outline:0;color:#354a67;background:#fbfcfe}
+.form-grid textarea{resize:vertical}
+.inline-form select{min-width:0;max-width:100%;font:inherit;padding:10px 11px;border:1px solid #dce4ed;border-radius:8px;outline:0;color:#354a67;background:#fbfcfe}
+.data-table{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.data-table .table-head>*,.data-table .table-row>*{min-width:0;overflow-wrap:anywhere}
+.finance-table .row-actions{display:flex;align-items:center;gap:6px;min-width:max-content}
+.schedule-row>div:nth-child(2),.record-row>div{min-width:0}
+.schedule-row strong,.record-row strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.schedule-row span:not(.state-chip),.record-row span:not(.state-chip){overflow-wrap:anywhere}
+.status-message{min-width:0}
+@media(max-width:720px){
+  .page-heading:not(.page-heading-overview) p{white-space:normal;overflow:visible;text-overflow:clip}
+  .page-heading-overview p{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .form-grid select,.form-grid textarea{width:100%;min-width:0}
+  .inline-form select,.inline-form input{flex:1 1 220px;min-width:0;width:100%;max-width:100%}
+  .nav-item{min-height:44px}
+  .finance-table .table-head span:last-child,.finance-table .table-row span:last-child{display:flex}
+  .data-table.finance-table .table-row .row-actions{display:flex}
+}
+@media(max-width:460px){
+  .form-grid select,.form-grid textarea,.form-grid input,.form-grid .primary-button{width:100%;min-width:0}
+  .inline-form{flex-direction:column;align-items:stretch}
+  .inline-form select,.inline-form input,.inline-form .primary-button{width:100%;flex:0 0 auto}
+}
