@@ -2,6 +2,7 @@ import type { D1Like } from "@tg-ad-manager/telegram";
 import { BusinessValidationError } from "./business.js";
 import { TelegramApiError, TelegramBotApiClient } from "./channels.js";
 import { classifyPublishError, PublishError, retryDelaySeconds, TelegramPublisher, type AssetRow, type PublishContent, type ScheduleType } from "./publishing.js";
+import { raiseOperationalAlert } from "./production-operations.js";
 
 export interface ProductionScheduleInput {
   scheduleType: ScheduleType;
@@ -46,6 +47,8 @@ interface ProductionExpiration {
   order_id: string;
   task_id: string;
   tenant_id: string;
+  workspace_id: string;
+  channel_id: string;
   telegram_chat_id: string;
   telegram_message_ids_json?: string;
   end_at: string;
@@ -172,22 +175,40 @@ export class ProductionPublishRepository {
   }
 
   async dueExpirations(now: string): Promise<ProductionExpiration[]> {
-    return all<ProductionExpiration>(this.db, `SELECT o.id AS order_id, t.id AS task_id, t.tenant_id, c.telegram_chat_id, t.telegram_message_ids_json, s.end_at
+    return all<ProductionExpiration>(this.db, `SELECT o.id AS order_id, t.id AS task_id, t.tenant_id, t.workspace_id, t.channel_id, c.telegram_chat_id, t.telegram_message_ids_json, s.end_at
       FROM ad_orders o JOIN ad_schedules s ON s.order_id = o.id JOIN publish_tasks t ON t.schedule_id = s.id JOIN telegram_channels c ON c.id = t.channel_id
-      WHERE o.status = 'published' AND s.end_at <= ? AND t.status = 'succeeded' ORDER BY s.end_at ASC LIMIT 50`, now);
+      WHERE o.status = 'published' AND s.end_at <= ? AND t.status = 'succeeded'
+        AND NOT EXISTS (SELECT 1 FROM publish_expiration_failures f WHERE f.task_id = t.id AND f.status IN ('succeeded', 'acknowledged'))
+      ORDER BY s.end_at ASC LIMIT 50`, now);
   }
 
-  async markExpired(expiration: ProductionExpiration, result: "succeeded" | "failed", now: string): Promise<void> {
-    if (result === "succeeded") await this.db.prepare("UPDATE ad_orders SET status = 'completed', updated_at = ? WHERE id = ? AND status = 'published'").bind(now, expiration.order_id).run();
-    await this.db.prepare("INSERT INTO publish_task_logs (id, tenant_id, task_id, attempt, status, message, duration_ms, created_at) SELECT ?, tenant_id, id, attempts, ?, ?, NULL, ? FROM publish_tasks WHERE id = ?").bind(crypto.randomUUID(), result, JSON.stringify({ expiration: true }), now, expiration.task_id).run();
+  async markExpired(expiration: ProductionExpiration, result: "succeeded" | "failed", now: string, errorMessage?: string): Promise<void> {
+    if (result === "succeeded") {
+      await this.db.prepare("UPDATE ad_orders SET status = 'completed', updated_at = ? WHERE id = ? AND status = 'published'").bind(now, expiration.order_id).run();
+      await this.db.prepare("UPDATE publish_expiration_failures SET status = 'succeeded', resolved_at = ?, last_attempt_at = ?, updated_at = ? WHERE task_id = ? AND status NOT IN ('succeeded', 'acknowledged')").bind(now, now, now, expiration.task_id).run();
+    } else {
+      const existing = await this.db.prepare("SELECT id, attempts FROM publish_expiration_failures WHERE task_id = ? LIMIT 1").bind(expiration.task_id).first<{ id: string; attempts: number }>();
+      const attempts = Number(existing?.attempts ?? 0) + 1;
+      const nextAttempt = new Date(Date.parse(now) + Math.min(3600, 60 * 2 ** Math.min(attempts - 1, 6)) * 1000).toISOString();
+      if (existing) await this.db.prepare("UPDATE publish_expiration_failures SET status = 'retrying', attempts = ?, next_attempt_at = ?, last_error = ?, last_attempt_at = ?, updated_at = ? WHERE id = ?").bind(attempts, nextAttempt, errorMessage ?? "到期删除失败", nextAttempt, now, existing.id).run();
+      else await this.db.prepare("INSERT INTO publish_expiration_failures (id, tenant_id, workspace_id, order_id, task_id, channel_id, telegram_chat_id, message_ids_json, status, attempts, next_attempt_at, last_error, first_failed_at, last_attempt_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)").bind(crypto.randomUUID(), expiration.tenant_id, expiration.workspace_id, expiration.order_id, expiration.task_id, expiration.channel_id, expiration.telegram_chat_id, expiration.telegram_message_ids_json ?? "[]", attempts, nextAttempt, errorMessage ?? "到期删除失败", now, now, now, now).run();
+      await raiseOperationalAlert(this.db, { fingerprint: `expiration-delete:${expiration.task_id}`, tenantId: expiration.tenant_id, workspaceId: expiration.workspace_id, severity: "critical", title: "广告到期删除失败", message: `订单 ${expiration.order_id} 的 Telegram 广告未能按时删除`, details: { taskId: expiration.task_id, attempts, nextAttempt, error: errorMessage ?? "到期删除失败" } }, now);
+    }
+    await this.db.prepare("INSERT INTO publish_task_logs (id, tenant_id, task_id, attempt, status, message, duration_ms, created_at) SELECT ?, tenant_id, id, attempts, ?, ?, NULL, ? FROM publish_tasks WHERE id = ?").bind(crypto.randomUUID(), result, JSON.stringify({ expiration: true, error: errorMessage ?? null }), now, expiration.task_id).run();
   }
+
+  async listExpirationFailures(scope: { tenantId: string; workspaceId: string }): Promise<Array<Record<string, unknown>>> { return all<Record<string, unknown>>(this.db, "SELECT id, order_id AS orderId, task_id AS taskId, channel_id AS channelId, telegram_chat_id AS telegramChatId, status, attempts, next_attempt_at AS nextAttemptAt, last_error AS lastError, first_failed_at AS firstFailedAt, last_attempt_at AS lastAttemptAt, resolved_at AS resolvedAt, resolution_note AS resolutionNote FROM publish_expiration_failures WHERE tenant_id = ? AND workspace_id = ? ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'retrying' THEN 1 ELSE 2 END, first_failed_at DESC LIMIT 200", scope.tenantId, scope.workspaceId); }
+
+  async retryExpirationFailure(scope: { tenantId: string; workspaceId: string }, failureId: string, now: string): Promise<void> { const row = await this.db.prepare("SELECT id FROM publish_expiration_failures WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status IN ('pending', 'retrying') LIMIT 1").bind(failureId, scope.tenantId, scope.workspaceId).first<{ id: string }>(); if (!row) throw new BusinessValidationError("EXPIRATION_FAILURE_NOT_FOUND", "到期删除失败记录不存在或不可重试"); await this.db.prepare("UPDATE publish_expiration_failures SET next_attempt_at = ?, updated_at = ? WHERE id = ?").bind(now, now, failureId).run(); }
+
+  async acknowledgeExpirationFailure(scope: { tenantId: string; workspaceId: string }, failureId: string, userId: string, note: string, now: string): Promise<void> { const row = await this.db.prepare("SELECT id FROM publish_expiration_failures WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status IN ('pending', 'retrying') LIMIT 1").bind(failureId, scope.tenantId, scope.workspaceId).first<{ id: string }>(); if (!row) throw new BusinessValidationError("EXPIRATION_FAILURE_NOT_FOUND", "到期删除失败记录不存在或已处理"); await this.db.prepare("UPDATE publish_expiration_failures SET status = 'acknowledged', resolved_at = ?, resolved_by = ?, resolution_note = ?, updated_at = ? WHERE id = ?").bind(now, userId, note, now, failureId).run(); }
 }
 
-export async function processProductionDuePublishTasks(env: ProductionPublishRuntimeEnv, now = new Date().toISOString()): Promise<{ processed: number; succeeded: number; retried: number; failed: number; expired: number }> {
-  if (!env.DB || !env.TELEGRAM_BOT_TOKEN) return { processed: 0, succeeded: 0, retried: 0, failed: 0, expired: 0 };
+export async function processProductionDuePublishTasks(env: ProductionPublishRuntimeEnv, now = new Date().toISOString()): Promise<{ processed: number; succeeded: number; retried: number; failed: number; expired: number; expirationFailed: number }> {
+  if (!env.DB || !env.TELEGRAM_BOT_TOKEN) return { processed: 0, succeeded: 0, retried: 0, failed: 0, expired: 0, expirationFailed: 0 };
   const repository = new ProductionPublishRepository(env.DB);
   const publisher = new TelegramPublisher(new TelegramBotApiClient(env.TELEGRAM_BOT_TOKEN, (input, init) => fetch(input, init), env.TELEGRAM_API_BASE_URL ?? "https://api.telegram.org"));
-  const result = { processed: 0, succeeded: 0, retried: 0, failed: 0, expired: 0 };
+  const result = { processed: 0, succeeded: 0, retried: 0, failed: 0, expired: 0, expirationFailed: 0 };
   for (let index = 0; index < 10; index += 1) {
     const task = await repository.claimNextTask(now);
     if (!task) break;
@@ -214,7 +235,8 @@ export async function processProductionDuePublishTasks(env: ProductionPublishRun
     } catch (error) {
       const failure = error instanceof TelegramApiError ? error.message : error instanceof Error ? error.message : "到期删除失败";
       console.warn("production_expiration_delete_failed", { orderId: expiration.order_id, message: failure });
-      await repository.markExpired(expiration, "failed", now);
+      await repository.markExpired(expiration, "failed", now, failure);
+      result.expirationFailed += 1;
     }
   }
   return result;

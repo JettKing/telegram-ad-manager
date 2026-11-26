@@ -17,6 +17,7 @@ import { ProductionMediaRepository } from "./production-media.js";
 import { ProductionBusinessRepository } from "./production-business.js";
 import { ProductionPaymentRepository } from "./production-payments.js";
 import { ProductionOperationsRepository } from "./production-operations.js";
+import { processNotificationOutbox, raiseOperationalAlert } from "./production-operations.js";
 import { parseCheckoutInput, parseCheckoutReviewInput, SubscriptionRepository } from "./subscription.js";
 
 export interface ApiBindings {
@@ -181,6 +182,14 @@ app.get("/health/ready", (context) => {
 
 app.get("/api/v1/health", (context) => context.json(success(healthPayload(runtimeEnv(context.env)), requestId(context))));
 app.get("/api/v1/metadata", (context) => context.json(success({ name: "TG Ad Manager", version, stage: "production-scheduling-api", schemaContract: runtimeEnv(context.env).D1_SCHEMA_CONTRACT ?? "legacy", externalIntegrations: { telegram: telegramServiceState(runtimeEnv(context.env).TELEGRAM_BOT_TOKEN), cloudflareD1: runtimeEnv(context.env).DB ? "binding_present" : "not_configured" } }, requestId(context))));
+app.get("/api/v1/operations/cron-liveness", async (context) => {
+  const env = runtimeEnv(context.env);
+  if (!env.DB || !productionContract(env)) return context.json(failure("OPERATIONS_NOT_CONFIGURED", "生产运维数据上下文尚未配置", requestId(context)), 503);
+  const now = new Date(); const row = await env.DB.prepare("SELECT status, checked_at FROM ops_health_snapshots WHERE component = 'production_cron' ORDER BY checked_at DESC LIMIT 1").bind().first<{ status: string; checked_at: string }>();
+  const ageSeconds = row ? Math.max(0, Math.floor((now.getTime() - Date.parse(row.checked_at)) / 1000)) : null; const stale = ageSeconds === null || ageSeconds > 10 * 60;
+  if (stale) { await raiseOperationalAlert(env.DB, { fingerprint: "production-cron:liveness", severity: "critical", title: "生产 Cron 长时间未执行", message: row ? `最近一次 Cron 已超过 ${Math.floor((ageSeconds ?? 0) / 60)} 分钟未更新` : "生产 Cron 尚未产生健康快照", details: { lastCheckedAt: row?.checked_at ?? null, ageSeconds } }); await processNotificationOutbox(env.DB, env.TELEGRAM_BOT_TOKEN); }
+  return context.json(success({ healthy: !stale, stale, lastCheckedAt: row?.checked_at ?? null, lastStatus: row?.status ?? "missing", ageSeconds }, requestId(context)), stale ? 503 : 200);
+});
 
 app.post("/api/v1/auth/telegram", async (context) => {
   const env = runtimeEnv(context.env);
@@ -459,6 +468,34 @@ app.post("/api/v1/publish-tasks/:taskId/cancel", requireAuth("publish:write"), a
   const env = runtimeEnv(context.env); const auth = context.get("auth");
   if (!env.DB || !auth || !productionContract(env)) return context.json(failure("OPERATIONS_NOT_CONFIGURED", "生产运维数据上下文尚未配置", requestId(context)), 503);
   try { await new ProductionOperationsRepository(env.DB).cancelTask({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, context.req.param("taskId"), auth.userId, new Date().toISOString()); return context.json(success({ cancelled: true, status: "cancelled" }, requestId(context))); }
+  catch (error) { return businessError(context, error, requestId(context)); }
+});
+
+app.get("/api/v1/expiration-failures", requireAuth("publish:read"), async (context) => {
+  const env = runtimeEnv(context.env); const auth = context.get("auth");
+  if (!env.DB || !auth || !productionContract(env)) return context.json(failure("OPERATIONS_NOT_CONFIGURED", "生产运维数据上下文尚未配置", requestId(context)), 503);
+  try { return context.json(success({ failures: await new ProductionPublishRepository(env.DB).listExpirationFailures({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }) }, requestId(context))); }
+  catch (error) { return businessError(context, error, requestId(context)); }
+});
+
+app.post("/api/v1/expiration-failures/:failureId/retry", requireAuth("publish:write"), async (context) => {
+  const env = runtimeEnv(context.env); const auth = context.get("auth");
+  if (!env.DB || !auth || !productionContract(env)) return context.json(failure("OPERATIONS_NOT_CONFIGURED", "生产运维数据上下文尚未配置", requestId(context)), 503);
+  try { await new ProductionPublishRepository(env.DB).retryExpirationFailure({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, context.req.param("failureId"), new Date().toISOString()); return context.json(success({ retried: true, status: "retrying" }, requestId(context))); }
+  catch (error) { return businessError(context, error, requestId(context)); }
+});
+
+app.post("/api/v1/expiration-failures/:failureId/acknowledge", requireAuth("publish:write"), async (context) => {
+  const env = runtimeEnv(context.env); const auth = context.get("auth");
+  if (!env.DB || !auth || !productionContract(env)) return context.json(failure("OPERATIONS_NOT_CONFIGURED", "生产运维数据上下文尚未配置", requestId(context)), 503);
+  try { const raw = await context.req.json<{ note?: string }>(); const note = typeof raw?.note === "string" && raw.note.trim() ? raw.note.trim().slice(0, 500) : "已人工确认处理"; await new ProductionPublishRepository(env.DB).acknowledgeExpirationFailure({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, context.req.param("failureId"), auth.userId, note, new Date().toISOString()); return context.json(success({ acknowledged: true, status: "acknowledged" }, requestId(context))); }
+  catch (error) { return businessError(context, error, requestId(context)); }
+});
+
+app.post("/api/v1/operations/notification-channels/telegram", requireAuth("settings:write"), async (context) => {
+  const env = runtimeEnv(context.env); const auth = context.get("auth");
+  if (!env.DB || !auth || !productionContract(env)) return context.json(failure("OPERATIONS_NOT_CONFIGURED", "生产运维数据上下文尚未配置", requestId(context)), 503);
+  try { const raw = await context.req.json<{ chatId?: string }>(); const chatId = typeof raw?.chatId === "string" ? raw.chatId.trim() : ""; if (!chatId || chatId.length > 100) throw new BusinessValidationError("TELEGRAM_CHAT_ID_REQUIRED", "Telegram 告警 chatId 必须有效"); const now = new Date().toISOString(); const id = crypto.randomUUID(); await env.DB.prepare("INSERT INTO ops_notification_channels (id, tenant_id, workspace_id, channel_type, destination_ref, status, created_at, updated_at) VALUES (?, ?, ?, 'telegram', ?, 'active', ?, ?) ON CONFLICT (tenant_id, workspace_id, channel_type, destination_ref) DO UPDATE SET status = 'active', updated_at = excluded.updated_at").bind(id, auth.tenantId, auth.workspaceId, chatId, now, now).run(); return context.json(success({ configured: true, channelType: "telegram" }, requestId(context))); }
   catch (error) { return businessError(context, error, requestId(context)); }
 });
 

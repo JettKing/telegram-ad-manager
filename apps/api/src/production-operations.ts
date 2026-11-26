@@ -1,5 +1,6 @@
 import type { D1Like } from "@tg-ad-manager/telegram";
 import { BusinessValidationError } from "./business.js";
+import { TelegramBotApiClient } from "./channels.js";
 
 type TaskStatus = "queued" | "processing" | "succeeded" | "failed" | "uncertain" | "cancelled" | "dead_letter";
 
@@ -8,6 +9,16 @@ export interface OperationsSummary {
   staleProcessing: number;
   openAlerts: number;
   latestCron?: { status: string; checkedAt: string; details: Record<string, unknown> };
+}
+
+export interface OperationalAlertInput {
+  fingerprint: string;
+  tenantId?: string;
+  workspaceId?: string;
+  severity: "info" | "warning" | "critical";
+  title: string;
+  message: string;
+  details: Record<string, unknown>;
 }
 
 async function all<T>(db: D1Like, query: string, ...values: unknown[]): Promise<T[]> {
@@ -47,20 +58,46 @@ export class ProductionOperationsRepository {
 
   async recordCronSnapshot(status: "ok" | "degraded" | "down", details: Record<string, unknown>, now: string, tenantId?: string, workspaceId?: string): Promise<void> {
     await this.db.prepare("INSERT INTO ops_health_snapshots (id, tenant_id, workspace_id, component, status, latency_ms, details_json, checked_at, source) VALUES (?, ?, ?, 'production_cron', ?, NULL, ?, ?, 'cron')").bind(crypto.randomUUID(), tenantId ?? null, workspaceId ?? null, status, JSON.stringify(details), now).run();
-    const fingerprint = "production-cron:execution";
-    const existing = await this.db.prepare("SELECT id FROM ops_alert_events WHERE fingerprint = ? AND status IN ('open', 'acknowledged') ORDER BY last_seen_at DESC LIMIT 1").bind(fingerprint).first<{ id: string }>();
-    if (status === "ok") {
-      if (existing) await this.db.prepare("UPDATE ops_alert_events SET status = 'resolved', resolved_at = ?, last_seen_at = ?, details_json = ? WHERE id = ?").bind(now, now, JSON.stringify(details), existing.id).run();
-      return;
-    }
-    const severity = status === "down" ? "critical" : "warning";
-    const title = status === "down" ? "生产 Cron 执行失败" : "生产 Cron 执行异常";
-    if (existing) {
-      await this.db.prepare("UPDATE ops_alert_events SET severity = ?, message = ?, details_json = ?, occurrence_count = occurrence_count + 1, last_seen_at = ? WHERE id = ?").bind(severity, title, JSON.stringify(details), now, existing.id).run();
-    } else {
-      await this.db.prepare("INSERT INTO ops_alert_events (id, tenant_id, workspace_id, fingerprint, component, severity, status, title, message, details_json, occurrence_count, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, 'production_cron', ?, 'open', ?, ?, ?, 1, ?, ?)").bind(crypto.randomUUID(), tenantId ?? null, workspaceId ?? null, fingerprint, severity, title, title, JSON.stringify(details), now, now).run();
-    }
+    if (status === "ok") await resolveOperationalAlert(this.db, "production-cron:execution", details, now);
+    else await raiseOperationalAlert(this.db, { fingerprint: "production-cron:execution", tenantId, workspaceId, severity: status === "down" ? "critical" : "warning", title: status === "down" ? "生产 Cron 执行失败" : "生产 Cron 执行异常", message: status === "down" ? "生产 Cron 没有成功完成执行" : "生产 Cron 执行完成但包含异常任务", details }, now);
   }
+}
+
+async function enqueueAlertNotifications(db: D1Like, alertId: string, eventType: "triggered" | "recovered", tenantId: string | undefined, workspaceId: string | undefined, now: string): Promise<void> {
+  const channels = await all<{ id: string }>(db, "SELECT id FROM ops_notification_channels WHERE channel_type = 'telegram' AND status = 'active' AND ((tenant_id = ? AND workspace_id = ?) OR tenant_id IS NULL)", tenantId ?? null, workspaceId ?? null);
+  for (const channel of channels) await db.prepare("INSERT INTO ops_notification_outbox (id, alert_id, channel_id, event_type, status, attempts, available_at, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', 0, ?, ?, ?)").bind(crypto.randomUUID(), alertId, channel.id, eventType, now, now, now).run();
+}
+
+export async function raiseOperationalAlert(db: D1Like, input: OperationalAlertInput, now = new Date().toISOString()): Promise<string> {
+  const existing = await db.prepare("SELECT id FROM ops_alert_events WHERE fingerprint = ? AND status IN ('open', 'acknowledged') ORDER BY last_seen_at DESC LIMIT 1").bind(input.fingerprint).first<{ id: string }>();
+  if (existing) {
+    await db.prepare("UPDATE ops_alert_events SET severity = ?, message = ?, details_json = ?, occurrence_count = occurrence_count + 1, last_seen_at = ? WHERE id = ?").bind(input.severity, input.message, JSON.stringify(input.details), now, existing.id).run();
+    return existing.id;
+  }
+  const alertId = crypto.randomUUID();
+  await db.prepare("INSERT INTO ops_alert_events (id, tenant_id, workspace_id, fingerprint, component, severity, status, title, message, details_json, occurrence_count, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, 'production_operations', ?, 'open', ?, ?, ?, 1, ?, ?)").bind(alertId, input.tenantId ?? null, input.workspaceId ?? null, input.fingerprint, input.severity, input.title, input.message, JSON.stringify(input.details), now, now).run();
+  await enqueueAlertNotifications(db, alertId, "triggered", input.tenantId, input.workspaceId, now);
+  return alertId;
+}
+
+export async function resolveOperationalAlert(db: D1Like, fingerprint: string, details: Record<string, unknown>, now = new Date().toISOString()): Promise<void> {
+  const existing = await db.prepare("SELECT id, tenant_id, workspace_id FROM ops_alert_events WHERE fingerprint = ? AND status IN ('open', 'acknowledged') ORDER BY last_seen_at DESC LIMIT 1").bind(fingerprint).first<{ id: string; tenant_id?: string; workspace_id?: string }>();
+  if (!existing) return;
+  await db.prepare("UPDATE ops_alert_events SET status = 'resolved', resolved_at = ?, last_seen_at = ?, details_json = ? WHERE id = ?").bind(now, now, JSON.stringify(details), existing.id).run();
+  await enqueueAlertNotifications(db, existing.id, "recovered", existing.tenant_id, existing.workspace_id, now);
+}
+
+export async function processNotificationOutbox(db: D1Like | undefined, token: string | undefined, now = new Date().toISOString()): Promise<{ sent: number; failed: number }> {
+  if (!db || !token) return { sent: 0, failed: 0 };
+  const rows = await all<{ id: string; destination_ref: string; event_type: string; title: string; message: string; attempts: number }>(db, "SELECT o.id, c.destination_ref, o.event_type, a.title, a.message, o.attempts FROM ops_notification_outbox o JOIN ops_notification_channels c ON c.id = o.channel_id JOIN ops_alert_events a ON a.id = o.alert_id WHERE o.status = 'queued' AND o.available_at <= ? AND c.status = 'active' ORDER BY o.created_at ASC LIMIT 10", now);
+  const client = new TelegramBotApiClient(token, (input, init) => fetch(input, init)); const result = { sent: 0, failed: 0 };
+  for (const row of rows) {
+    await db.prepare("UPDATE ops_notification_outbox SET status = 'processing', attempts = attempts + 1, updated_at = ? WHERE id = ? AND status = 'queued'").bind(now, row.id).run();
+    const text = `${row.event_type === "recovered" ? "[恢复]" : "[告警]"} ${row.title}\n${row.message}`;
+    try { await client.sendMessage(row.destination_ref, text); await db.prepare("UPDATE ops_notification_outbox SET status = 'sent', sent_at = ?, updated_at = ? WHERE id = ?").bind(now, now, row.id).run(); result.sent += 1; }
+    catch (error) { const next = new Date(Date.parse(now) + Math.min(3600, 60 * 2 ** Math.min(row.attempts, 6)) * 1000).toISOString(); await db.prepare("UPDATE ops_notification_outbox SET status = 'queued', available_at = ?, last_error = ?, updated_at = ? WHERE id = ?").bind(next, error instanceof Error ? error.message.slice(0, 500) : "Telegram notification failed", now, row.id).run(); result.failed += 1; }
+  }
+  return result;
 }
 
 export async function recordProductionCronSnapshot(db: D1Like | undefined, status: "ok" | "degraded" | "down", details: Record<string, unknown>, now = new Date().toISOString()): Promise<void> {

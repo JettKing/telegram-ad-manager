@@ -13,7 +13,7 @@ describe("production schema publish adapter", () => {
   });
 
   it("does not touch D1 when production dependencies are not configured", async () => {
-    await expect(processProductionDuePublishTasks({})).resolves.toEqual({ processed: 0, succeeded: 0, retried: 0, failed: 0, expired: 0 });
+    await expect(processProductionDuePublishTasks({})).resolves.toEqual({ processed: 0, succeeded: 0, retried: 0, failed: 0, expired: 0, expirationFailed: 0 });
   });
 
   it("reads production schedule and queue field names without legacy table aliases", async () => {
