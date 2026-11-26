@@ -1,0 +1,57 @@
+name: backup-production-d1
+
+on:
+  schedule:
+    # 02:17 Asia/Shanghai (18:17 UTC), outside the 5-minute publish boundary.
+    - cron: "17 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export-production-d1:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Export production D1
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          mkdir -p backup
+          stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+          output="backup/tg-ad-manager-production-${stamp}.sql"
+          pnpm wrangler d1 export tg-ad-manager \
+            --remote \
+            --skip-confirmation \
+            --output "$output" \
+            --config wrangler.production.jsonc
+          test -s "$output"
+          printf 'backup_file=%s\n' "$output" >> "$GITHUB_OUTPUT"
+        id: export
+
+      - name: Validate exported backup
+        run: python3 scripts/validate-d1-backup.py "${{ steps.export.outputs.backup_file }}"
+
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-d1-backup-${{ github.run_id }}
+          path: backup/*.sql
+          if-no-files-found: error
+          retention-days: 30

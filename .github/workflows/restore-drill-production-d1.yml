@@ -1,0 +1,47 @@
+name: restore-drill-production-d1
+
+on:
+  workflow_dispatch:
+    inputs:
+      backup_run_id:
+        description: "The completed backup-production-d1 workflow run ID"
+        required: true
+        type: string
+      confirmation:
+        description: "Type RESTORE_DRILL to confirm a non-production recovery drill"
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  restore-drill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require explicit drill confirmation
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: test "$CONFIRMATION" = "RESTORE_DRILL"
+
+      - name: Download selected backup artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BACKUP_RUN_ID: ${{ inputs.backup_run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p restore
+          gh run download "$BACKUP_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "production-d1-backup-${BACKUP_RUN_ID}" \
+            --dir restore
+          test "$(find restore -maxdepth 1 -name '*.sql' | wc -l)" -eq 1
+
+      - name: Restore into temporary SQLite and validate
+        run: python3 scripts/validate-d1-backup.py "$(find restore -maxdepth 1 -name '*.sql' -print -quit)"
+
+      - name: Report safe drill boundary
+        run: echo "Recovery drill completed in temporary SQLite; production D1 was not modified."
