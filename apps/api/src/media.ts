@@ -34,8 +34,10 @@ export interface ParsedMediaMessage {
   height?: number;
   durationSeconds?: number;
   receivedAt: string;
+  sourceKind: "private" | "channel" | "other";
 }
 
+export function isExplicitMediaCommand(value: string | undefined): boolean { return typeof value === "string" && /^(?:\/ad|\/upload)(?:@[A-Za-z0-9_]+)?(?:\s|$)/i.test(value.trim()); }
 export interface MediaScope {
   tenantId: string;
   workspaceId: string;
@@ -83,7 +85,8 @@ function fileFields(value: Record<string, unknown>): Pick<ParsedMediaMessage, "f
 export function parseTelegramMediaUpdate(value: unknown, now = new Date()): ParsedMediaMessage | null {
   const update = record(value);
   if (!update) return null;
-  const message = record(update.message) ?? record(update.channel_post) ?? record(update.edited_message) ?? record(update.edited_channel_post);
+  const channelMessage = record(update.channel_post) ?? record(update.edited_channel_post);
+  const message = record(update.message) ?? channelMessage ?? record(update.edited_message);
   if (!message) return null;
   const messageId = safeInt(message.message_id);
   const chat = record(message.chat);
@@ -91,18 +94,19 @@ export function parseTelegramMediaUpdate(value: unknown, now = new Date()): Pars
   if (!messageId || !chatId) return null;
   const from = record(message.from);
   const fromTelegramUserId = from ? safeString(from.id) ?? (typeof from.id === "number" ? String(from.id) : undefined) : undefined;
+  const sourceKind = channelMessage ? "channel" : chat?.type === "private" ? "private" : "other";
   const mediaGroupId = safeString(message.media_group_id);
   const caption = safeString(message.caption);
   const text = safeString(message.text);
   const receivedAt = typeof message.date === "number" && Number.isFinite(message.date) ? new Date(message.date * 1000).toISOString() : now.toISOString();
 
   const photo = chooseLargestPhoto(message.photo);
-  if (photo) return { messageId, sourceChatId: chatId, fromTelegramUserId, mediaType: "photo", mediaGroupId, caption, receivedAt, ...fileFields(photo) };
+  if (photo) return { messageId, sourceChatId: chatId, fromTelegramUserId, sourceKind, mediaType: "photo", mediaGroupId, caption, receivedAt, ...fileFields(photo) };
   for (const [key, mediaType] of [["video", "video"], ["animation", "animation"], ["document", "document"]] as const) {
     const media = record(message[key]);
-    if (media) return { messageId, sourceChatId: chatId, fromTelegramUserId, mediaType, mediaGroupId, caption, receivedAt, ...fileFields(media) };
+    if (media) return { messageId, sourceChatId: chatId, fromTelegramUserId, sourceKind, mediaType, mediaGroupId, caption, receivedAt, ...fileFields(media) };
   }
-  if (text) return { messageId, sourceChatId: chatId, fromTelegramUserId, mediaType: "text", textContent: text, caption, receivedAt };
+  if (text) return { messageId, sourceChatId: chatId, fromTelegramUserId, sourceKind, mediaType: "text", textContent: text, caption, receivedAt };
   return null;
 }
 
@@ -175,6 +179,11 @@ export class D1MediaRepository {
   async ingest(botIdentityId: string, update: unknown, now = new Date().toISOString()): Promise<MediaIngestResult> {
     const media = parseTelegramMediaUpdate(update, new Date(now));
     if (!media) return { handled: false, reason: "unsupported_update" };
+    if (media.sourceKind !== "private" && !isExplicitMediaCommand(media.caption ?? media.textContent)) {
+      if (!media.mediaGroupId) return { handled: false, reason: "unsupported_update" };
+      const authorizedGroup = await this.db.prepare("SELECT id FROM media_groups WHERE bot_identity_id = ? AND telegram_media_group_id = ? LIMIT 1").bind(botIdentityId, media.mediaGroupId).first<{ id: string }>();
+      if (!authorizedGroup) return { handled: false, reason: "unsupported_update" };
+    }
     const scope = await this.resolveScope(botIdentityId, media.sourceChatId, media.fromTelegramUserId);
     if (!scope) return { handled: false, reason: "scope_not_found" };
     const assetId = await this.upsertAsset(scope, botIdentityId, media, now);

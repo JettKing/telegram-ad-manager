@@ -1,6 +1,6 @@
 import type { D1Like } from "@tg-ad-manager/telegram";
 import { BusinessValidationError } from "./business.js";
-import { parseTelegramMediaUpdate, transitionMediaGroup, type MediaGroupState, type MediaIngestResult, type ParsedMediaMessage } from "./media.js";
+import { isExplicitMediaCommand, parseTelegramMediaUpdate, transitionMediaGroup, type MediaGroupState, type MediaIngestResult, type ParsedMediaMessage } from "./media.js";
 
 interface AssetRow { id: string; media_type: "photo" | "video" | "animation" | "document"; file_id?: string; file_unique_id?: string; file_name?: string; mime_type?: string; file_size?: number; width?: number; height?: number; duration_seconds?: number; caption?: string; media_group_id?: string; review_status?: string; review_note?: string; reviewed_at?: string; created_at: string }
 interface ScopeRow { tenantId: string; workspaceId: string }
@@ -88,6 +88,11 @@ export class ProductionMediaRepository {
   async ingest(botIdentityId: string, update: unknown, now = new Date().toISOString()): Promise<MediaIngestResult> {
     const media = parseTelegramMediaUpdate(update, new Date(now));
     if (!media) return { handled: false, reason: "unsupported_update" };
+    if (media.sourceKind !== "private" && !isExplicitMediaCommand(media.caption ?? media.textContent)) {
+      if (!media.mediaGroupId) return { handled: false, reason: "unsupported_update" };
+      const authorizedGroup = await this.db.prepare("SELECT id FROM media_groups WHERE bot_identity_id = ? AND telegram_media_group_id = ? LIMIT 1").bind(botIdentityId, media.mediaGroupId).first<{ id: string }>();
+      if (!authorizedGroup) return { handled: false, reason: "unsupported_update" };
+    }
     if (media.mediaType === "text") return { handled: false, reason: "unsupported_update" };
     const scope = await this.resolveScope(botIdentityId, media.sourceChatId, media.fromTelegramUserId);
     if (!scope) return { handled: false, reason: "scope_not_found" };

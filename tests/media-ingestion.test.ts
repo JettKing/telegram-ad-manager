@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseTelegramMediaUpdate, transitionMediaGroup } from "../apps/api/src/media";
+import { isExplicitMediaCommand, parseTelegramMediaUpdate, transitionMediaGroup } from "../apps/api/src/media";
 
 const base = { update_id: 1, message: { message_id: 10, date: 1794873600, chat: { id: 123, type: "private" }, from: { id: 456 } } };
 
@@ -9,7 +9,7 @@ describe("Telegram media parser", () => {
       { file_id: "small", file_unique_id: "small-u", width: 100, height: 100 },
       { file_id: "large", file_unique_id: "large-u", width: 1000, height: 800, file_size: 12345 },
     ] } }, new Date("2026-11-17T00:00:00.000Z"));
-    expect(parsed).toMatchObject({ mediaType: "photo", fileId: "large", fileUniqueId: "large-u", width: 1000, height: 800, fileSize: 12345, mediaGroupId: "album-1", caption: "campaign", sourceChatId: "123", fromTelegramUserId: "456" });
+    expect(parsed).toMatchObject({ mediaType: "photo", sourceKind: "private", fileId: "large", fileUniqueId: "large-u", width: 1000, height: 800, fileSize: 12345, mediaGroupId: "album-1", caption: "campaign", sourceChatId: "123", fromTelegramUserId: "456" });
   });
 
   it("parses video, animation, document and plain text", () => {
@@ -22,6 +22,13 @@ describe("Telegram media parser", () => {
   it("ignores unsupported updates", () => {
     expect(parseTelegramMediaUpdate({ update_id: 2, callback_query: { id: "callback" } })).toBeNull();
     expect(parseTelegramMediaUpdate({ update_id: 3, message: { message_id: 1, chat: { id: 1 } } })).toBeNull();
+  });
+
+  it("marks channel posts and accepts only explicit ad commands", () => {
+    const parsed = parseTelegramMediaUpdate({ update_id: 4, channel_post: { message_id: 2, chat: { id: -100, type: "channel" }, caption: "/ad summer campaign", photo: [{ file_id: "channel-photo" }] } });
+    expect(parsed?.sourceKind).toBe("channel");
+    expect(isExplicitMediaCommand(parsed?.caption)).toBe(true);
+    expect(isExplicitMediaCommand("普通频道内容")).toBe(false);
   });
 });
 
