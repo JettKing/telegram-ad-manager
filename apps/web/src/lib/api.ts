@@ -20,6 +20,8 @@ export type TimelineEvent = { createdAt: string; type: string; objectId?: string
 export type ExpirationFailure = { id: string; orderId: string; taskId: string; channelId: string; telegramChatId: string; status: string; attempts: number; nextAttemptAt?: string; lastError?: string; firstFailedAt?: string; lastAttemptAt?: string; resolvedAt?: string; resolutionNote?: string };
 export type MediaAsset = { id: string; media_type: string; file_id?: string; file_name?: string; mime_type?: string; file_size?: number; width?: number; height?: number; duration_seconds?: number; caption?: string; media_group_id?: string; review_status?: string; review_note?: string; reviewed_at?: string; created_at: string };
 export type OperationsSummary = { taskCounts: Record<string, number>; staleProcessing: number; openAlerts: number; latestCron?: { status: string; checkedAt: string; details: Record<string, unknown> } };
+export type WorkspaceMember = { userId: string; telegramUserId: string; username?: string; displayName: string; role: string; status: string; joinedAt: string; lastSeenAt?: string };
+export type AuditLog = { id: string; actorUserId?: string; actorDisplayName?: string; action: string; entityType: string; entityId: string; beforeSummary?: string; afterSummary?: string; source: string; result: string; createdAt: string };
 
 export class ApiError extends Error { constructor(public readonly code: string, message: string, public readonly status: number) { super(message); } }
 function sessionToken(): string | null { return localStorage.getItem(SESSION_KEY); }
@@ -28,6 +30,10 @@ export async function getHealth(signal?: AbortSignal): Promise<ApiResponse<Healt
 export async function authenticate(): Promise<AuthData> { const token = sessionToken(); if (token) { try { await request<Record<string, unknown>>("/api/v1/auth/me"); const saved = localStorage.getItem(CONTEXT_KEY); if (saved) return JSON.parse(saved) as AuthData; } catch { localStorage.removeItem(SESSION_KEY); localStorage.removeItem(CONTEXT_KEY); } } const initData = getTelegramInitData(); if (!initData) throw new ApiError("INIT_DATA_REQUIRED", "请从 Telegram Bot 的“进入广告管理”入口打开 Mini App", 400); const data = await request<AuthData>("/api/v1/auth/telegram", { method: "POST", body: JSON.stringify({ initData }), headers: { "X-Telegram-Init-Data": initData } }); localStorage.setItem(SESSION_KEY, data.session.token); localStorage.setItem(CONTEXT_KEY, JSON.stringify(data)); return data; }
 export async function logout(): Promise<void> { try { if (sessionToken()) await request<{ loggedOut: boolean }>("/api/v1/auth/logout", { method: "POST" }); } finally { localStorage.removeItem(SESSION_KEY); localStorage.removeItem(CONTEXT_KEY); } }
 export const getWorkspace = () => request<{ tenantId: string; workspaceId: string; role: string; permissions: string[] }>("/api/v1/workspace/context");
+export const getWorkspaceMembers = () => request<{ members: WorkspaceMember[] }>("/api/v1/workspace/members");
+export const updateWorkspaceMember = (userId: string, input: { role?: string; status?: string }) => request<{ updated: boolean }>(`/api/v1/workspace/members/${encodeURIComponent(userId)}`, { method: "PATCH", body: JSON.stringify(input) });
+export const removeWorkspaceMember = (userId: string) => request<{ removed: boolean }>(`/api/v1/workspace/members/${encodeURIComponent(userId)}`, { method: "DELETE" });
+export const getAuditLogs = (limit = 100) => request<{ logs: AuditLog[] }>(`/api/v1/audit-logs?limit=${limit}`);
 export const getChannels = () => request<{ channels: Channel[] }>("/api/v1/channels");
 export const bindChannel = (chatId: string) => request<{ channelId: string; status: string; title: string; telegramChatId: string }>("/api/v1/channels/bind", { method: "POST", body: JSON.stringify({ chatId }) });
 export const getCustomers = () => request<{ customers: Customer[] }>("/api/v1/customers");

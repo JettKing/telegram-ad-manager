@@ -20,6 +20,7 @@ import { ProductionOperationsRepository } from "./production-operations.js";
 import { processNotificationOutbox, raiseOperationalAlert } from "./production-operations.js";
 import { enqueueCustomerNotification } from "./production-customer-notifications.js";
 import { parseCheckoutInput, parseCheckoutReviewInput, SubscriptionRepository } from "./subscription.js";
+import { ProductionAdminRepository, writeProductionAudit } from "./production-admin.js";
 
 export interface R2BucketLike {
   put(key: string, value: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string, options?: { httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string> }): Promise<unknown>;
@@ -235,6 +236,34 @@ app.post("/api/v1/auth/logout", requireAuth(), async (context) => {
 app.get("/api/v1/workspace/context", requireAuth("workspace:read"), (context) => {
   const auth = context.get("auth");
   return context.json(success({ tenantId: auth?.tenantId, workspaceId: auth?.workspaceId, role: auth?.role, permissions: auth?.role ? ["workspace:read", "channel:read", "customer:read", "order:read", "publish:read", "finance:read"].filter((permission) => hasPermission(auth.role, permission as Permission)) : [] }, requestId(context)));
+});
+
+app.get("/api/v1/workspace/members", requireAuth("workspace:manage"), async (context) => {
+  const env = runtimeEnv(context.env); const auth = context.get("auth");
+  if (!env.DB || !auth || !productionContract(env)) return context.json(failure("MEMBERS_NOT_CONFIGURED", "生产成员管理上下文尚未配置", requestId(context)), 503);
+  try { return context.json(success({ members: await new ProductionAdminRepository(env.DB).listMembers({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }) }, requestId(context))); }
+  catch (error) { return businessError(context, error, requestId(context)); }
+});
+
+app.patch("/api/v1/workspace/members/:userId", requireAuth("workspace:manage"), async (context) => {
+  const env = runtimeEnv(context.env); const auth = context.get("auth");
+  if (!env.DB || !auth || !productionContract(env)) return context.json(failure("MEMBERS_NOT_CONFIGURED", "生产成员管理上下文尚未配置", requestId(context)), 503);
+  try { const body = await context.req.json() as Record<string, unknown>; const role = body.role === undefined ? undefined : String(body.role) as "owner" | "admin" | "manager" | "editor" | "finance" | "viewer"; const status = body.status === undefined ? undefined : String(body.status) as "active" | "suspended"; const now = new Date().toISOString(); const result = await new ProductionAdminRepository(env.DB).updateMember({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("userId"), role, status, now); await writeProductionAudit(env.DB, { tenantId: auth.tenantId, workspaceId: auth.workspaceId, actorUserId: auth.userId, action: "member.updated", entityType: "workspace_member", entityId: context.req.param("userId"), before: result.before, after: result.after, createdAt: now }); return context.json(success({ updated: result.updated }, requestId(context))); }
+  catch (error) { return businessError(context, error, requestId(context)); }
+});
+
+app.delete("/api/v1/workspace/members/:userId", requireAuth("workspace:manage"), async (context) => {
+  const env = runtimeEnv(context.env); const auth = context.get("auth");
+  if (!env.DB || !auth || !productionContract(env)) return context.json(failure("MEMBERS_NOT_CONFIGURED", "生产成员管理上下文尚未配置", requestId(context)), 503);
+  try { const now = new Date().toISOString(); const result = await new ProductionAdminRepository(env.DB).removeMember({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, context.req.param("userId"), now); await writeProductionAudit(env.DB, { tenantId: auth.tenantId, workspaceId: auth.workspaceId, actorUserId: auth.userId, action: "member.suspended", entityType: "workspace_member", entityId: context.req.param("userId"), before: result.before, after: { ...result.before, status: "suspended" }, createdAt: now }); return context.json(success({ removed: result.removed }, requestId(context))); }
+  catch (error) { return businessError(context, error, requestId(context)); }
+});
+
+app.get("/api/v1/audit-logs", requireAuth("workspace:manage"), async (context) => {
+  const env = runtimeEnv(context.env); const auth = context.get("auth");
+  if (!env.DB || !auth || !productionContract(env)) return context.json(failure("AUDIT_NOT_CONFIGURED", "生产审计查询上下文尚未配置", requestId(context)), 503);
+  try { const rawLimit = Number(context.req.query("limit") ?? 100); return context.json(success({ logs: await new ProductionAdminRepository(env.DB).listAudit({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, Number.isFinite(rawLimit) ? rawLimit : 100) }, requestId(context))); }
+  catch (error) { return businessError(context, error, requestId(context)); }
 });
 
 app.get("/api/v1/subscription/plans", requireAuth("workspace:read"), async (context) => {
