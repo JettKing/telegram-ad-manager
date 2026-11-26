@@ -27,6 +27,7 @@ export function initializeTelegramWebApp(): { available: boolean; initData: stri
   if (!webApp) return { available: false, initData: "" };
   webApp.ready();
   webApp.expand();
+  if (typeof document === "undefined") return { available: true, initData: webApp.initData ?? "" };
 
   const root = document.documentElement;
   const syncViewport = () => {
