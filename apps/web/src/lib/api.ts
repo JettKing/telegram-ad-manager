@@ -75,6 +75,21 @@ export const getCustomers = () => request<{ customers: Customer[] }>("/api/v1/cu
 export const createCustomer = (input: Record<string, unknown>) => request<{ customerId: string }>("/api/v1/customers", { method: "POST", body: JSON.stringify(input) });
 export const getPackages = () => request<{ packages: Package[] }>("/api/v1/packages");
 export const getOrders = () => request<{ orders: Order[] }>("/api/v1/orders");
-export const getSchedules = () => request<{ schedules: Schedule[] }>("/api/v1/schedules");
-export const getPublishTasks = () => request<{ tasks: PublishTask[] }>("/api/v1/publish-tasks");
+export async function getSchedules(): Promise<{ schedules: Schedule[] }> {
+  const response = await request<{ schedules: Array<Record<string, unknown>> }>("/api/v1/schedules");
+  return { schedules: response.schedules.map((schedule) => ({
+    ...schedule,
+    scheduled_at: schedule.scheduled_at ?? schedule.startAt,
+    created_at: schedule.created_at ?? schedule.createdAt,
+  } as Schedule)) };
+}
+export async function getPublishTasks(): Promise<{ tasks: PublishTask[] }> {
+  const response = await request<{ tasks: Array<Record<string, unknown>> }>("/api/v1/publish-tasks");
+  return { tasks: response.tasks.map((task) => ({
+    ...task,
+    attempt_count: task.attempt_count ?? task.attempts,
+    scheduled_at: task.scheduled_at ?? task.availableAt,
+    last_error: task.last_error ?? task.lastErrorMessage,
+  } as PublishTask)) };
+}
 export const getMedia = () => request<{ assets: Record<string, unknown>[] }>("/api/v1/media-assets");

@@ -1,10 +1,40 @@
 import { readFile } from "node:fs/promises";
 
+function stripJsonComments(source: string): string {
+  let output = "";
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    const next = source[index + 1];
+    if (inString) {
+      output += char;
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      output += char;
+    } else if (char === "/" && next === "/") {
+      index += 1;
+      while (index + 1 < source.length && source[index + 1] !== "\n") index += 1;
+    } else if (char === "/" && next === "*") {
+      index += 1;
+      while (index + 1 < source.length && !(source[index] === "*" && source[index + 1] === "/")) index += 1;
+      index += 1;
+    } else {
+      output += char;
+    }
+  }
+  return output.replace(/,\s*([}\]])/g, "$1");
+}
+
 async function main(): Promise<void> {
   const path = "wrangler.production.jsonc";
   const raw = await readFile(path, "utf8");
-  const json = raw.replace(/\/\/.*$/gm, "").replace(/,\s*([}\]])/g, "$1");
-  const config = JSON.parse(json) as Record<string, any>;
+  const config = JSON.parse(stripJsonComments(raw)) as Record<string, any>;
   const errors: string[] = [];
   if (config.name !== "tg-ad-manager-api") errors.push("production Worker name must be tg-ad-manager-api");
   if (config.account_id !== "bf9869d76a7fcbd9f75aefc5f98f3fbb") errors.push("production account_id does not match the audited Cloudflare account");
