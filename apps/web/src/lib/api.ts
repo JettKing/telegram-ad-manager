@@ -18,6 +18,7 @@ export type Refund = { id: string; order_id: string; amount_minor: number; reaso
 export type ReconciliationRow = { orderId: string; orderNo: string; dueMinor: number; approvedPaymentMinor: number; approvedRefundMinor: number; paymentStatus: string; status: string };
 export type TimelineEvent = { createdAt: string; type: string; objectId?: string; details?: string; status?: string; amountMinor?: number; reason?: string; entryType?: string; direction?: string; transactionRef?: string };
 export type ExpirationFailure = { id: string; orderId: string; taskId: string; channelId: string; telegramChatId: string; status: string; attempts: number; nextAttemptAt?: string; lastError?: string; firstFailedAt?: string; lastAttemptAt?: string; resolvedAt?: string; resolutionNote?: string };
+export type MediaAsset = { id: string; media_type: string; file_id?: string; file_name?: string; mime_type?: string; file_size?: number; width?: number; height?: number; duration_seconds?: number; caption?: string; media_group_id?: string; review_status?: string; review_note?: string; reviewed_at?: string; created_at: string };
 export type OperationsSummary = { taskCounts: Record<string, number>; staleProcessing: number; openAlerts: number; latestCron?: { status: string; checkedAt: string; details: Record<string, unknown> } };
 
 export class ApiError extends Error { constructor(public readonly code: string, message: string, public readonly status: number) { super(message); } }
@@ -58,4 +59,8 @@ export const acknowledgeExpirationFailure = (failureId: string, note?: string) =
 export const configureTelegramAlerts = (chatId: string) => request<{ configured: boolean; channelType: string }>("/api/v1/operations/notification-channels/telegram", { method: "POST", body: JSON.stringify({ chatId }) });
 export const retryPublishTask = (taskId: string) => request<{ retried: boolean; status: string }>(`/api/v1/publish-tasks/${taskId}/retry`, { method: "POST" });
 export const cancelPublishTask = (taskId: string) => request<{ cancelled: boolean; status: string }>(`/api/v1/publish-tasks/${taskId}/cancel`, { method: "POST" });
-export const getMedia = () => request<{ assets: Record<string, unknown>[] }>("/api/v1/media-assets");
+export const getMedia = () => request<{ assets: MediaAsset[] }>("/api/v1/media-assets");
+
+export const reviewMediaAsset = (assetId: string, status: "approved" | "rejected", note?: string) => request<{ updated: boolean; status: string }>(`/api/v1/media-assets/${encodeURIComponent(assetId)}/review`, { method: "POST", body: JSON.stringify({ status, note }) });
+export const replaceMediaAsset = (assetId: string, replacementAssetId: string) => request<{ updated: boolean; status: string }>(`/api/v1/media-assets/${encodeURIComponent(assetId)}/replace`, { method: "POST", body: JSON.stringify({ replacementAssetId }) });
+export async function openMediaPreview(assetId: string): Promise<void> { const token = sessionToken(); const response = await fetch(`${API_BASE_URL}/api/v1/media-assets/${encodeURIComponent(assetId)}/preview`, { headers: { Accept: "*/*", ...(token ? { Authorization: `Bearer ${token}` } : {}) } }); if (!response.ok) throw new ApiError("MEDIA_PREVIEW_FAILED", "素材预览失败", response.status); const blob = await response.blob(); const url = URL.createObjectURL(blob); window.open(url, "_blank", "noopener,noreferrer"); setTimeout(() => URL.revokeObjectURL(url), 60_000); }

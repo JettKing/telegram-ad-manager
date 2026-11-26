@@ -148,7 +148,7 @@ export class ProductionPublishRepository {
       FROM publish_tasks t JOIN ad_orders o ON o.id = t.order_id JOIN telegram_channels c ON c.id = t.channel_id WHERE t.id = ? LIMIT 1`).bind(taskId).first<ProductionPayload>();
     if (!payload) throw new PublishError("PUBLISH_PAYLOAD_NOT_FOUND", "生产发布上下文不存在", false);
     const content: PublishContent = { text: payload.content_text ?? "", assetIds: [], entities: [] };
-    const assets = await all<AssetRow>(this.db, `SELECT id, media_type, file_id, caption, sort_order FROM creative_media WHERE creative_id = (SELECT creative_id FROM ad_orders WHERE id = ?) ORDER BY sort_order ASC`, payload.order_id);
+    const assets = await all<AssetRow>(this.db, `SELECT id, media_type, file_id, caption, sort_order FROM creative_media WHERE creative_id = (SELECT creative_id FROM ad_orders WHERE id = ?) AND (review_status = 'approved' OR review_status IS NULL) ORDER BY sort_order ASC`, payload.order_id);
     if (payload.media_file_id && assets.length === 0) assets.push({ id: `order-media:${payload.order_id}`, media_type: payload.media_type === "media_group" ? "album" : payload.media_type, file_id: payload.media_file_id, sort_order: 0 });
     if (payload.media_items_json && assets.length === 0) {
       try {

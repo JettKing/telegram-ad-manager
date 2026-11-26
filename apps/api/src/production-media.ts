@@ -2,7 +2,7 @@ import type { D1Like } from "@tg-ad-manager/telegram";
 import { BusinessValidationError } from "./business.js";
 import { parseTelegramMediaUpdate, transitionMediaGroup, type MediaGroupState, type MediaIngestResult, type ParsedMediaMessage } from "./media.js";
 
-interface AssetRow { id: string; media_type: "photo" | "video" | "animation" | "document"; file_id?: string; file_unique_id?: string; file_name?: string; mime_type?: string; file_size?: number; width?: number; height?: number; duration_seconds?: number; caption?: string; media_group_id?: string; created_at: string }
+interface AssetRow { id: string; media_type: "photo" | "video" | "animation" | "document"; file_id?: string; file_unique_id?: string; file_name?: string; mime_type?: string; file_size?: number; width?: number; height?: number; duration_seconds?: number; caption?: string; media_group_id?: string; review_status?: string; review_note?: string; reviewed_at?: string; created_at: string }
 interface ScopeRow { tenantId: string; workspaceId: string }
 interface GroupRow { id: string; tenant_id: string; workspace_id: string; state: MediaGroupState; version: number }
 
@@ -14,8 +14,27 @@ export class ProductionMediaRepository {
   constructor(private readonly db: D1Like) {}
 
   async listAssets(tenantId: string, workspaceId: string): Promise<AssetRow[]> {
-    const prepared = this.db.prepare(`SELECT id, media_type, file_id, file_unique_id, file_name, mime_type, file_size, width, height, duration_seconds, caption, media_group_id, created_at FROM creative_media WHERE tenant_id = ? AND workspace_id = ? ORDER BY created_at DESC LIMIT 100`).bind(tenantId, workspaceId);
+    const prepared = this.db.prepare(`SELECT id, media_type, file_id, file_unique_id, file_name, mime_type, file_size, width, height, duration_seconds, caption, media_group_id, review_status, review_note, reviewed_at, created_at FROM creative_media WHERE tenant_id = ? AND workspace_id = ? ORDER BY created_at DESC LIMIT 100`).bind(tenantId, workspaceId);
     return prepared.all ? (await prepared.all<AssetRow>()).results : [];
+  }
+
+  async reviewAsset(scope: ScopeRow, assetId: string, reviewerId: string, status: "approved" | "rejected", note: string, now: string): Promise<boolean> {
+    const asset = await this.db.prepare("SELECT id FROM creative_media WHERE id = ? AND tenant_id = ? AND workspace_id = ? LIMIT 1").bind(assetId, scope.tenantId, scope.workspaceId).first<{ id: string }>();
+    if (!asset) throw new BusinessValidationError("MEDIA_ASSET_NOT_FOUND", "素材不存在或不属于当前工作空间");
+    if (status === "rejected" && !note.trim()) throw new BusinessValidationError("MEDIA_REVIEW_NOTE_REQUIRED", "驳回素材必须填写原因");
+    const result = await this.db.prepare("UPDATE creative_media SET review_status = ?, review_note = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ?").bind(status, note.trim() || null, reviewerId, now, now, assetId, scope.tenantId, scope.workspaceId).run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  async replaceAsset(scope: ScopeRow, assetId: string, replacementAssetId: string, now: string): Promise<boolean> {
+    if (assetId === replacementAssetId) throw new BusinessValidationError("MEDIA_REPLACEMENT_SAME_ASSET", "替换素材不能与原素材相同");
+    const target = await this.db.prepare("SELECT id, creative_id FROM creative_media WHERE id = ? AND tenant_id = ? AND workspace_id = ? LIMIT 1").bind(assetId, scope.tenantId, scope.workspaceId).first<{ id: string; creative_id?: string }>();
+    const source = await this.db.prepare("SELECT media_type, file_id, file_unique_id, file_name, mime_type, file_size, width, height, duration_seconds, caption, media_group_id FROM creative_media WHERE id = ? AND tenant_id = ? AND workspace_id = ? LIMIT 1").bind(replacementAssetId, scope.tenantId, scope.workspaceId).first<Record<string, unknown>>();
+    if (!target || !source) throw new BusinessValidationError("MEDIA_REPLACEMENT_NOT_FOUND", "原素材或替换素材不存在");
+    const locked = target.creative_id ? await this.db.prepare("SELECT id FROM ad_orders WHERE creative_id = ? AND status NOT IN ('draft', 'pending_payment') LIMIT 1").bind(target.creative_id).first<{ id: string }>() : null;
+    if (locked) throw new BusinessValidationError("MEDIA_REPLACEMENT_LOCKED", "订单进入付款或投放流程后不能直接替换素材");
+    const result = await this.db.prepare("UPDATE creative_media SET media_type = ?, file_id = ?, file_unique_id = ?, file_name = ?, mime_type = ?, file_size = ?, width = ?, height = ?, duration_seconds = ?, caption = ?, media_group_id = ?, review_status = 'pending', review_note = NULL, reviewed_by = NULL, reviewed_at = NULL, updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ?").bind(source.media_type, source.file_id ?? null, source.file_unique_id ?? null, source.file_name ?? null, source.mime_type ?? null, source.file_size ?? null, source.width ?? null, source.height ?? null, source.duration_seconds ?? null, source.caption ?? null, source.media_group_id ?? null, now, assetId, scope.tenantId, scope.workspaceId).run();
+    return (result.meta?.changes ?? 0) > 0;
   }
 
   private async resolveScope(botIdentityId: string, sourceChatId: string, fromTelegramUserId?: string): Promise<ScopeRow | null> {
