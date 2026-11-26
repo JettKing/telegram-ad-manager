@@ -16,6 +16,7 @@ import { ProductionChannelRepository } from "./production-channels.js";
 import { ProductionMediaRepository } from "./production-media.js";
 import { ProductionBusinessRepository } from "./production-business.js";
 import { ProductionPaymentRepository } from "./production-payments.js";
+import { ProductionOperationsRepository } from "./production-operations.js";
 import { parseCheckoutInput, parseCheckoutReviewInput, SubscriptionRepository } from "./subscription.js";
 
 export interface ApiBindings {
@@ -438,6 +439,27 @@ app.get("/api/v1/publish-tasks", requireAuth("publish:read"), async (context) =>
   const env = runtimeEnv(context.env); const auth = context.get("auth");
   if (!env.DB || !auth) return context.json(failure("PUBLISH_QUEUE_NOT_CONFIGURED", "发布队列数据库上下文尚未配置", requestId(context)), 503);
   return context.json(success({ tasks: await publishRepository(env.DB, env).listTasks(auth.tenantId, auth.workspaceId) }, requestId(context)));
+});
+
+app.get("/api/v1/operations/summary", requireAuth("publish:read"), async (context) => {
+  const env = runtimeEnv(context.env); const auth = context.get("auth");
+  if (!env.DB || !auth || !productionContract(env)) return context.json(failure("OPERATIONS_NOT_CONFIGURED", "生产运维数据上下文尚未配置", requestId(context)), 503);
+  try { return context.json(success(await new ProductionOperationsRepository(env.DB).summary({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, new Date().toISOString()), requestId(context))); }
+  catch (error) { return businessError(context, error, requestId(context)); }
+});
+
+app.post("/api/v1/publish-tasks/:taskId/retry", requireAuth("publish:write"), async (context) => {
+  const env = runtimeEnv(context.env); const auth = context.get("auth");
+  if (!env.DB || !auth || !productionContract(env)) return context.json(failure("OPERATIONS_NOT_CONFIGURED", "生产运维数据上下文尚未配置", requestId(context)), 503);
+  try { await new ProductionOperationsRepository(env.DB).retryTask({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, context.req.param("taskId"), auth.userId, new Date().toISOString()); return context.json(success({ retried: true, status: "queued" }, requestId(context))); }
+  catch (error) { return businessError(context, error, requestId(context)); }
+});
+
+app.post("/api/v1/publish-tasks/:taskId/cancel", requireAuth("publish:write"), async (context) => {
+  const env = runtimeEnv(context.env); const auth = context.get("auth");
+  if (!env.DB || !auth || !productionContract(env)) return context.json(failure("OPERATIONS_NOT_CONFIGURED", "生产运维数据上下文尚未配置", requestId(context)), 503);
+  try { await new ProductionOperationsRepository(env.DB).cancelTask({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, context.req.param("taskId"), auth.userId, new Date().toISOString()); return context.json(success({ cancelled: true, status: "cancelled" }, requestId(context))); }
+  catch (error) { return businessError(context, error, requestId(context)); }
 });
 
 app.post("/api/v1/orders/:orderId/schedules", requireAuth("publish:write"), async (context) => {

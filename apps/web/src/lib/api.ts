@@ -27,6 +27,7 @@ export type Order = { id: string; order_no: string; customer_id: string; channel
 export type Schedule = { id: string; order_id: string; scheduled_at: string; status: string; created_at: string } & Record<string, unknown>;
 export type PublishTask = { id: string; order_id: string; status: string; attempt_count: number; scheduled_at?: string; last_error?: string } & Record<string, unknown>;
 export type Payment = { id: string; order_id: string; method: string; amount_minor: number; transaction_ref?: string; proof_asset_id?: string; status: string; reviewed_by?: string; reviewed_at?: string; review_note?: string; created_at: string };
+export type OperationsSummary = { taskCounts: Record<string, number>; staleProcessing: number; openAlerts: number; latestCron?: { status: string; checkedAt: string; details: Record<string, unknown> } };
 
 export class ApiError extends Error {
   constructor(public readonly code: string, message: string, public readonly status: number) { super(message); }
@@ -106,4 +107,7 @@ export async function getPublishTasks(): Promise<{ tasks: PublishTask[] }> {
     last_error: task.last_error ?? task.lastErrorMessage,
   } as PublishTask)) };
 }
+export const getOperationsSummary = () => request<OperationsSummary>("/api/v1/operations/summary");
+export const retryPublishTask = (taskId: string) => request<{ retried: boolean; status: string }>(`/api/v1/publish-tasks/${taskId}/retry`, { method: "POST" });
+export const cancelPublishTask = (taskId: string) => request<{ cancelled: boolean; status: string }>(`/api/v1/publish-tasks/${taskId}/cancel`, { method: "POST" });
 export const getMedia = () => request<{ assets: Record<string, unknown>[] }>("/api/v1/media-assets");
