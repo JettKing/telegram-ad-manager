@@ -23,13 +23,17 @@ function App() {
   const [data, setData] = useState<DataState>(emptyData);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [loadDiagnostics, setLoadDiagnostics] = useState<string[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
   const loadData = async () => {
     setRefreshing(true); setError("");
+    const requestLabels = ["频道 /api/v1/channels", "客户 /api/v1/customers", "套餐 /api/v1/packages", "订单 /api/v1/orders", "排期 /api/v1/schedules", "发布任务 /api/v1/publish-tasks", "素材 /api/v1/media-assets"];
     const results = await Promise.allSettled([getChannels(), getCustomers(), getPackages(), getOrders(), getSchedules(), getPublishTasks(), getMedia()]);
     const next = { ...emptyData };
     const [channels, customers, packages, orders, schedules, tasks, media] = results;
+    const diagnostics = results.flatMap((result, index) => result.status === "rejected" ? [`${requestLabels[index]}：${result.reason instanceof ApiError ? `[${result.reason.code}] ${result.reason.message}（HTTP ${result.reason.status}）` : result.reason instanceof Error ? result.reason.message : String(result.reason)}`] : []);
+    setLoadDiagnostics(diagnostics);
     if (channels.status === "fulfilled") next.channels = channels.value.channels;
     if (customers.status === "fulfilled") next.customers = customers.value.customers;
     if (packages.status === "fulfilled") next.packages = packages.value.packages;
@@ -59,7 +63,7 @@ function App() {
     </aside>
     {mobileOpen && <button className="mobile-backdrop" onClick={() => setMobileOpen(false)} aria-label="关闭导航" />}
       <main className="main-content"><header className="topbar"><button className="icon-button mobile-menu" onClick={() => setMobileOpen(true)}><Menu size={20} /></button><div className="breadcrumb"><span>运营工作台</span><ChevronRight size={15} /><strong>{current.label}</strong></div><div className="topbar-actions"><div className="connection-pill"><span className={`status-dot ${health?.ok ? "online" : ""}`} />{health?.ok ? "生产 API 已连接" : "生产 API 状态未知"}</div><div className="profile-chip">{auth.user.displayName.slice(0, 1)}</div></div></header>
-      <div className="content-wrap"><section className="page-heading"><div><div className="eyebrow">{auth.workspace.name} · 运营工作台</div><h1>{current.label}</h1><p>{pageSubtitle(page)}</p></div><button className="secondary-button" onClick={() => void loadData()} disabled={refreshing}><RefreshCw size={15} className={refreshing ? "spin" : ""} />刷新数据</button></section>{error && <div className="error-banner">{error}</div>}{page === "overview" ? <Overview data={data} onNavigate={choose} /> : <PageContent page={page} data={data} auth={auth} onRefresh={loadData} />}</div>
+      <div className="content-wrap"><section className="page-heading"><div><div className="eyebrow">{auth.workspace.name} · 运营工作台</div><h1>{current.label}</h1><p>{pageSubtitle(page)}</p></div><button className="secondary-button" onClick={() => void loadData()} disabled={refreshing}><RefreshCw size={15} className={refreshing ? "spin" : ""} />刷新数据</button></section>{error && <div className="error-banner">{error}</div>}{loadDiagnostics.length > 0 && <div className="error-banner"><strong>接口诊断：</strong>{loadDiagnostics.map((item) => <div key={item}>{item}</div>)}</div>}{page === "overview" ? <Overview data={data} onNavigate={choose} /> : <PageContent page={page} data={data} auth={auth} onRefresh={loadData} />}</div>
     </main>
   </div>;
 }
