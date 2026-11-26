@@ -2,7 +2,7 @@
 
 ## 自动备份
 
-`.github/workflows/backup-production-d1.yml` 每天 UTC 18:17（北京时间 02:17）执行一次，也支持手动触发。流程会：
+`.github/workflows/backup-production-d1.yml` 每天北京时间 00:00（UTC 16:00，前一天）执行一次，也支持手动触发。流程会：
 
 1. 使用 GitHub production environment 中的 Cloudflare 凭证导出 `tg-ad-manager` 生产 D1；
 2. 用临时 SQLite 内存数据库执行恢复，检查 SQL 是否可执行、完整性是否为 `ok`，并确认关键表存在；
