@@ -37,14 +37,15 @@ function sqliteFixture() {
   database.exec(`
     CREATE TABLE users (id TEXT PRIMARY KEY, display_name TEXT);
     CREATE TABLE ad_orders (
-      id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, workspace_id TEXT NOT NULL, customer_id TEXT,
-      total_due_minor INTEGER NOT NULL, payment_status TEXT NOT NULL, status TEXT NOT NULL, updated_at TEXT
+      id TEXT PRIMARY KEY, order_no TEXT, tenant_id TEXT NOT NULL, workspace_id TEXT NOT NULL, customer_id TEXT,
+      total_due_minor INTEGER NOT NULL, currency TEXT NOT NULL DEFAULT 'CNY', payment_status TEXT NOT NULL, status TEXT NOT NULL, updated_at TEXT
     );
+    CREATE TABLE ad_packages (id TEXT PRIMARY KEY, currency TEXT NOT NULL DEFAULT 'CNY', price_minor INTEGER NOT NULL);
     CREATE TABLE payment_submissions (
       id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, workspace_id TEXT NOT NULL, order_id TEXT NOT NULL,
       customer_id TEXT, amount_minor INTEGER NOT NULL, currency TEXT NOT NULL, payment_method TEXT NOT NULL,
       transaction_no TEXT, proof_file_ref TEXT, paid_at TEXT, note TEXT, status TEXT NOT NULL,
-      idempotency_key TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      idempotency_key TEXT, reviewed_by TEXT, reviewed_at TEXT, review_note TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
     CREATE UNIQUE INDEX idx_test_payment_transaction_unique ON payment_submissions(tenant_id, workspace_id, transaction_no)
       WHERE transaction_no IS NOT NULL AND TRIM(transaction_no) <> '';
@@ -64,6 +65,8 @@ function sqliteFixture() {
       VALUES ('order-1', 'tenant-1', 'workspace-1', 'customer-1', 10000, 'paid', 'paid', '2026-11-27T00:00:00.000Z');
     INSERT INTO ad_orders (id, tenant_id, workspace_id, customer_id, total_due_minor, payment_status, status, updated_at)
       VALUES ('order-payment', 'tenant-1', 'workspace-1', 'customer-1', 10000, 'unpaid', 'pending_payment', '2026-11-27T00:00:00.000Z');
+    INSERT INTO ad_orders (id, tenant_id, workspace_id, customer_id, total_due_minor, currency, payment_status, status, updated_at)
+      VALUES ('order-ton', 'tenant-1', 'workspace-1', 'customer-1', 2000000000, 'TON', 'unpaid', 'pending_payment', '2026-11-27T00:00:00.000Z');
     INSERT INTO payment_submissions (id, tenant_id, workspace_id, order_id, customer_id, amount_minor, currency, payment_method, status, idempotency_key, created_at, updated_at)
       VALUES ('payment-1', 'tenant-1', 'workspace-1', 'order-1', 'customer-1', 10000, 'CNY', 'bank_transfer', 'approved', 'payment:payment-1', '2026-11-27T00:00:00.000Z', '2026-11-27T00:00:00.000Z');
     INSERT INTO ad_order_refunds (id, tenant_id, workspace_id, order_id, amount_minor, reason, status, reviewed_by, reviewed_at, created_at, updated_at)
@@ -73,8 +76,10 @@ function sqliteFixture() {
     INSERT INTO ad_order_refunds (id, tenant_id, workspace_id, order_id, amount_minor, reason, status, reviewed_by, reviewed_at, created_at, updated_at)
       VALUES ('legacy-unmatched', 'tenant-1', 'workspace-1', 'order-1', 500, 'old unmatched request', 'approved', 'reviewer-1', '2026-11-25T00:00:00.000Z', '2026-11-25T00:00:00.000Z', '2026-11-25T00:00:00.000Z');
   `);
-  const migration = readFileSync(resolve(process.cwd(), "apps/api/production-migrations/active/0018_refund_disbursement.sql"), "utf8");
-  database.exec(migration);
+  for (const file of ["0018_refund_disbursement.sql", "0019_multi_currency_finance.sql"]) {
+    database.exec(readFileSync(resolve(process.cwd(), `apps/api/production-migrations/active/${file}`), "utf8"));
+  }
+  database.prepare("UPDATE ad_orders SET network = 'TON', currency_scale = 9 WHERE id = 'order-ton'").run();
   const d1 = new SqliteD1(database);
   return { database, d1, db: d1 as unknown as D1Like };
 }
@@ -91,7 +96,7 @@ async function main() {
     const unmatched = database.prepare("SELECT disbursement_legacy_inferred, disbursed_at FROM ad_order_refunds WHERE id = 'legacy-unmatched'").get() as Record<string, unknown>;
     assert.deepEqual({ ...unmatched }, { disbursement_legacy_inferred: 1, disbursed_at: null });
     const repo = new ProductionPaymentRepository(new SqliteD1(database) as unknown as D1Like);
-    await assert.rejects(() => repo.disburseRefund(scope, 'finance-1', 'legacy-unmatched', { method: 'bank_transfer', transactionRef: 'DO-NOT-DUPLICATE' }, now), { code: 'REFUND_LEGACY_RECONCILIATION_REQUIRED' });
+    await assert.rejects(() => repo.disburseRefund(scope, 'finance-1', 'legacy-unmatched', { method: 'bank_transfer', transactionRef: 'DO-NOT-DUPLICATE', actualAmountMinor: 1 }, now), { code: 'REFUND_LEGACY_RECONCILIATION_REQUIRED' });
     database.exec("INSERT INTO ad_order_refunds (id, tenant_id, workspace_id, order_id, amount_minor, reason, status, idempotency_key, created_at, updated_at) VALUES ('first-key', 'tenant-1', 'workspace-1', 'order-1', 1, 'first', 'pending_review', 'same-key', 'now', 'now')");
     assert.throws(() => database.exec("INSERT INTO ad_order_refunds (id, tenant_id, workspace_id, order_id, amount_minor, reason, status, idempotency_key, created_at, updated_at) VALUES ('duplicate-key', 'tenant-1', 'workspace-1', 'order-1', 1, 'second', 'pending_review', 'same-key', 'now', 'now')"));
     database.close();
@@ -103,6 +108,7 @@ async function main() {
     const input = { idempotencyKey: "refund-request-1", amountMinor: 5000, reason: "campaign cancelled", method: "bank_transfer" };
     const id = await repo.createRefund(scope, "finance-1", "order-1", input, now);
     assert.equal(await repo.createRefund(scope, "finance-1", "order-1", input, now), id);
+    assert.equal((database.prepare("SELECT payment_submission_id FROM ad_order_refunds WHERE id = ?").get(id) as { payment_submission_id: string }).payment_submission_id, "payment-1");
     await assert.rejects(() => repo.createRefund(scope, "finance-1", "order-1", { ...input, amountMinor: 4000 }, now), { code: "IDEMPOTENCY_KEY_CONFLICT" });
     await assert.rejects(() => repo.createRefund(scope, "finance-1", "order-1", { idempotencyKey: "refund-request-2", amountMinor: 6000, reason: "second request" }, now), { code: "REFUND_EXCEEDS_PAID" });
     assert.equal((database.prepare("SELECT COUNT(*) AS count FROM ad_order_refunds WHERE idempotency_key = 'refund-request-1'").get() as { count: number }).count, 1);
@@ -118,14 +124,35 @@ async function main() {
     await assert.rejects(() => repo.createPayment(scope, "finance-1", "order-payment", { ...paymentInput, amountMinor: 3000 }, now), { code: "IDEMPOTENCY_KEY_CONFLICT" });
     const refundId = await repo.createRefund(scope, "finance-1", "order-1", { idempotencyKey: "refund-disburse-1", amountMinor: 5000, reason: "approved refund" }, now);
     database.prepare("UPDATE ad_order_refunds SET status = 'approved' WHERE id = ?").run(refundId);
-    await assert.rejects(() => repo.disburseRefund(scope, "finance-1", refundId, { method: "bank_transfer" }, now), { code: "REFUND_DISBURSEMENT_REF_REQUIRED" });
-    await repo.disburseRefund(scope, "finance-1", refundId, { method: "bank_transfer", transactionRef: "RF-LIVE-1" }, now);
+    await assert.rejects(() => repo.disburseRefund(scope, "finance-1", refundId, { method: "bank_transfer", actualAmountMinor: 5000 }, now), { code: "REFUND_DISBURSEMENT_REF_REQUIRED" });
+    await repo.disburseRefund(scope, "finance-1", refundId, { method: "bank_transfer", transactionRef: "RF-LIVE-1", actualAmountMinor: 5000 }, now);
     const disbursed = database.prepare("SELECT disbursed_by, disbursed_at, disbursement_transaction_ref FROM ad_order_refunds WHERE id = ?").get(refundId) as Record<string, unknown>;
     assert.equal(disbursed.disbursed_by, "finance-1");
     assert.equal(disbursed.disbursed_at, now);
     assert.equal(disbursed.disbursement_transaction_ref, "RF-LIVE-1");
     assert.equal((database.prepare("SELECT COUNT(*) AS count FROM financial_ledger_entries WHERE id = ?").get(`refund:${refundId}:disbursed`) as { count: number }).count, 1);
     assert.throws(() => database.prepare("UPDATE ad_order_refunds SET disbursement_transaction_ref = 'RF-LIVE-1' WHERE id = 'legacy-unmatched'").run());
+    database.close();
+  }
+
+  {
+    const { database, db } = sqliteFixture();
+    const repo = new ProductionPaymentRepository(db);
+    const paymentId = await repo.createPayment(scope, "finance-1", "order-ton", { idempotencyKey: "ton-payment", amountMinor: 1_250_000_000, method: "crypto", transactionRef: "TON-HASH-1" }, now);
+    const payment = database.prepare("SELECT currency, amount_scale, network, amount_minor FROM payment_submissions WHERE id = ?").get(paymentId) as Record<string, unknown>;
+    assert.deepEqual({ ...payment }, { currency: "TON", amount_scale: 9, network: "TON", amount_minor: 1_250_000_000 });
+    await repo.reviewPayment(scope, "reviewer-1", paymentId, { status: "approved" }, now);
+    const paymentLedger = database.prepare("SELECT currency, amount_scale, network FROM financial_ledger_entries WHERE payment_submission_id = ?").get(paymentId) as Record<string, unknown>;
+    assert.deepEqual({ ...paymentLedger }, { currency: "TON", amount_scale: 9, network: "TON" });
+    const refundId = await repo.createRefund(scope, "finance-1", "order-ton", { idempotencyKey: "ton-refund", amountMinor: 500_000_000, reason: "partial refund" }, now);
+    await repo.reviewRefund(scope, "reviewer-1", refundId, { status: "approved" }, now);
+    await assert.rejects(() => repo.disburseRefund(scope, "finance-1", refundId, { method: "crypto", transactionRef: "TON-REFUND-1", actualAmountMinor: 400_000_000 }, now), { code: "REFUND_ACTUAL_AMOUNT_MISMATCH" });
+    await repo.disburseRefund(scope, "finance-1", refundId, { method: "crypto", transactionRef: "TON-REFUND-1", actualAmountMinor: 500_000_000 }, now);
+    const refundLedger = database.prepare("SELECT amount_minor, currency, amount_scale, network, payment_submission_id FROM financial_ledger_entries WHERE id = ?").get(`refund:${refundId}:disbursed`) as Record<string, unknown>;
+    assert.deepEqual({ ...refundLedger }, { amount_minor: 500_000_000, currency: "TON", amount_scale: 9, network: "TON", payment_submission_id: paymentId });
+    const recon = await repo.reconciliation(scope.tenantId, scope.workspaceId);
+    assert.equal(recon.find((row) => row.orderId === "order-ton")?.currency, "TON");
+    assert.equal(recon.find((row) => row.orderId === "order-ton")?.disbursedRefundMinor, 500_000_000);
     database.close();
   }
 

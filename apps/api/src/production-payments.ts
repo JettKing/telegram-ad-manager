@@ -2,9 +2,9 @@ import type { D1Like } from "@tg-ad-manager/telegram";
 import { BusinessValidationError, type OrderStatus } from "./business.js";
 import { assertPaymentMethod, type PaymentInput, type PaymentReviewInput, type RefundInput, type RefundReviewInput } from "./payments.js";
 
-interface OrderPaymentContext { id: string; receivable_minor: number; payment_status: string; status: OrderStatus; customer_id: string }
-interface PaymentRow { id: string; order_id: string; method: string; amount_minor: number; transaction_ref?: string; proof_asset_id?: string; paid_at?: string; status: "pending_review" | "approved" | "rejected"; reviewed_by?: string; reviewed_at?: string; review_note?: string; created_at: string }
-interface RefundRow { id: string; order_id: string; amount_minor: number; reason: string; method?: string; transaction_ref?: string; status: "pending_review" | "approved" | "rejected"; requested_by?: string; reviewed_by?: string; reviewed_at?: string; review_note?: string; disbursed_by?: string; disbursed_at?: string; disbursement_method?: string; disbursement_transaction_ref?: string; disbursement_legacy_inferred?: number; created_at: string }
+interface OrderPaymentContext { id: string; receivable_minor: number; currency: string; currency_scale: number; network?: string | null; payment_status: string; status: OrderStatus; customer_id: string }
+interface PaymentRow { id: string; order_id: string; method: string; amount_minor: number; currency?: string; amount_scale?: number; network?: string | null; transaction_ref?: string; proof_asset_id?: string; paid_at?: string; status: "pending_review" | "approved" | "rejected"; reviewed_by?: string; reviewed_at?: string; review_note?: string; created_at: string }
+interface RefundRow { id: string; order_id: string; payment_submission_id?: string | null; amount_minor: number; currency?: string; amount_scale?: number; network?: string | null; actual_amount_minor?: number | null; reason: string; method?: string; transaction_ref?: string; status: "pending_review" | "approved" | "rejected"; requested_by?: string; reviewed_by?: string; reviewed_at?: string; review_note?: string; disbursed_by?: string; disbursed_at?: string; disbursement_method?: string; disbursement_transaction_ref?: string; disbursement_legacy_inferred?: number; created_at: string }
 interface D1Bound { first<T>(): Promise<T | null>; all?<T>(): Promise<{ results: T[] }>; run(): Promise<{ meta?: { changes?: number } }> }
 interface BatchResult { meta?: { changes?: number } }
 
@@ -20,7 +20,7 @@ export class ProductionPaymentRepository {
   }
 
   private async order(scope: { tenantId: string; workspaceId: string }, orderId: string): Promise<OrderPaymentContext> {
-    const row = await this.db.prepare("SELECT id, total_due_minor AS receivable_minor, payment_status, status, customer_id FROM ad_orders WHERE id = ? AND tenant_id = ? AND workspace_id = ? LIMIT 1").bind(orderId, scope.tenantId, scope.workspaceId).first<OrderPaymentContext>();
+    const row = await this.db.prepare("SELECT id, total_due_minor AS receivable_minor, currency, currency_scale, network, payment_status, status, customer_id FROM ad_orders WHERE id = ? AND tenant_id = ? AND workspace_id = ? LIMIT 1").bind(orderId, scope.tenantId, scope.workspaceId).first<OrderPaymentContext>();
     if (!row) throw new BusinessValidationError("ORDER_NOT_FOUND", "订单不存在或不属于当前工作空间");
     return row;
   }
@@ -34,12 +34,12 @@ export class ProductionPaymentRepository {
   }
 
   async listPendingPayments(tenantId: string, workspaceId: string): Promise<PaymentRow[]> {
-    return all<PaymentRow>(this.db, `SELECT p.id, p.order_id, p.payment_method AS method, p.amount_minor, p.transaction_no AS transaction_ref, p.proof_file_ref AS proof_asset_id, p.paid_at, CASE p.status WHEN 'submitted' THEN 'pending_review' ELSE p.status END AS status, p.reviewed_by, p.reviewed_at, p.review_note, p.created_at FROM payment_submissions p WHERE p.tenant_id = ? AND p.workspace_id = ? AND p.status = 'submitted' ORDER BY p.created_at ASC LIMIT 200`, tenantId, workspaceId);
+    return all<PaymentRow>(this.db, `SELECT p.id, p.order_id, p.payment_method AS method, p.amount_minor, p.currency, p.amount_scale, p.network, p.transaction_no AS transaction_ref, p.proof_file_ref AS proof_asset_id, p.paid_at, CASE p.status WHEN 'submitted' THEN 'pending_review' ELSE p.status END AS status, p.reviewed_by, p.reviewed_at, p.review_note, p.created_at FROM payment_submissions p WHERE p.tenant_id = ? AND p.workspace_id = ? AND p.status = 'submitted' ORDER BY p.created_at ASC LIMIT 200`, tenantId, workspaceId);
   }
 
   async listOrderPayments(scope: { tenantId: string; workspaceId: string }, orderId: string): Promise<PaymentRow[]> {
     await this.order(scope, orderId);
-    return all<PaymentRow>(this.db, `SELECT id, order_id, payment_method AS method, amount_minor, transaction_no AS transaction_ref, proof_file_ref AS proof_asset_id, paid_at, CASE status WHEN 'submitted' THEN 'pending_review' ELSE status END AS status, reviewed_by, reviewed_at, review_note, created_at FROM payment_submissions WHERE tenant_id = ? AND workspace_id = ? AND order_id = ? ORDER BY created_at DESC`, scope.tenantId, scope.workspaceId, orderId);
+    return all<PaymentRow>(this.db, `SELECT id, order_id, payment_method AS method, amount_minor, currency, amount_scale, network, transaction_no AS transaction_ref, proof_file_ref AS proof_asset_id, paid_at, CASE status WHEN 'submitted' THEN 'pending_review' ELSE status END AS status, reviewed_by, reviewed_at, review_note, created_at FROM payment_submissions WHERE tenant_id = ? AND workspace_id = ? AND order_id = ? ORDER BY created_at DESC`, scope.tenantId, scope.workspaceId, orderId);
   }
 
   async createPayment(scope: { tenantId: string; workspaceId: string }, actorUserId: string, orderId: string, input: PaymentInput, now: string): Promise<string> {
@@ -54,7 +54,7 @@ export class ProductionPaymentRepository {
     }
     const order = await this.order(scope, orderId);
     if (!["pending_payment", "pending_review"].includes(order.status)) throw new BusinessValidationError("ORDER_PAYMENT_NOT_OPEN", "当前订单状态不接受付款凭证");
-    if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0) throw new BusinessValidationError("INVALID_PAYMENT_AMOUNT", "付款金额必须是正整数（分）");
+    if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0) throw new BusinessValidationError("INVALID_PAYMENT_AMOUNT", "付款金额必须是对应资产精度下的大于 0 的原子单位整数");
     await this.proofAsset(scope, input.proofAssetId);
     if (input.transactionRef) {
       // The production unique index reserves a non-empty transaction number for every
@@ -66,8 +66,8 @@ export class ProductionPaymentRepository {
     const id = crypto.randomUUID();
     // Keep the balance check in the same SQL statement as the insert. Concurrent
     // submissions cannot both reserve the same remaining receivable.
-    const insert = this.db.prepare(`INSERT INTO payment_submissions (id, tenant_id, workspace_id, order_id, customer_id, amount_minor, currency, payment_method, transaction_no, proof_file_ref, paid_at, note, status, idempotency_key, created_at, updated_at)
-      SELECT ?, ?, ?, o.id, o.customer_id, ?, 'CNY', ?, ?, ?, NULL, ?, 'submitted', ?, ?, ? FROM ad_orders o
+    const insert = this.db.prepare(`INSERT INTO payment_submissions (id, tenant_id, workspace_id, order_id, customer_id, amount_minor, currency, amount_scale, network, payment_method, transaction_no, proof_file_ref, paid_at, note, status, idempotency_key, created_at, updated_at)
+      SELECT ?, ?, ?, o.id, o.customer_id, ?, o.currency, o.currency_scale, o.network, ?, ?, ?, NULL, ?, 'submitted', ?, ?, ? FROM ad_orders o
       WHERE o.id = ? AND o.tenant_id = ? AND o.workspace_id = ? AND o.status IN ('pending_payment', 'pending_review')
         AND ? <= o.total_due_minor - COALESCE((SELECT SUM(p.amount_minor) FROM payment_submissions p WHERE p.tenant_id = ? AND p.workspace_id = ? AND p.order_id = o.id AND p.status IN ('submitted', 'approved')), 0)`)
       .bind(id, scope.tenantId, scope.workspaceId, input.amountMinor, input.method, input.transactionRef ?? null, input.proofAssetId ?? null, null, idempotencyKey, now, now, orderId, scope.tenantId, scope.workspaceId, input.amountMinor, scope.tenantId, scope.workspaceId);
@@ -107,8 +107,8 @@ export class ProductionPaymentRepository {
       this.db.prepare("UPDATE payment_submissions SET status = ?, reviewed_by = ?, reviewed_at = ?, review_note = ?, paid_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status = 'submitted'").bind(dbStatus, reviewerUserId, now, input.note ?? null, status === "approved" ? now : null, now, paymentId, scope.tenantId, scope.workspaceId),
     ];
     if (status === "approved") {
-      statements.push(this.db.prepare(`INSERT OR IGNORE INTO financial_ledger_entries (id, tenant_id, workspace_id, order_id, payment_submission_id, entry_type, direction, amount_minor, currency, reason, actor_user_id, created_at)
-        SELECT ?, ?, ?, p.order_id, p.id, 'payment', 'credit', p.amount_minor, 'CNY', 'payment_submission_approved', ?, ? FROM payment_submissions p
+      statements.push(this.db.prepare(`INSERT OR IGNORE INTO financial_ledger_entries (id, tenant_id, workspace_id, order_id, payment_submission_id, entry_type, direction, amount_minor, currency, amount_scale, network, reason, actor_user_id, created_at)
+        SELECT ?, ?, ?, p.order_id, p.id, 'payment', 'credit', p.amount_minor, p.currency, p.amount_scale, p.network, 'payment_submission_approved', ?, ? FROM payment_submissions p
         WHERE p.id = ? AND p.tenant_id = ? AND p.workspace_id = ? AND p.status = 'approved' AND p.reviewed_by = ? AND p.reviewed_at = ?
           AND NOT EXISTS (SELECT 1 FROM financial_ledger_entries l WHERE l.payment_submission_id = p.id AND l.entry_type = 'payment')`)
         .bind(`payment:${paymentId}`, scope.tenantId, scope.workspaceId, reviewerUserId, now, paymentId, scope.tenantId, scope.workspaceId, reviewerUserId, now));
@@ -135,11 +135,11 @@ export class ProductionPaymentRepository {
 
   async listOrderRefunds(scope: { tenantId: string; workspaceId: string }, orderId: string): Promise<RefundRow[]> {
     await this.order(scope, orderId);
-    return all<RefundRow>(this.db, "SELECT id, order_id, amount_minor, reason, method, transaction_ref, status, requested_by, reviewed_by, reviewed_at, review_note, disbursed_by, disbursed_at, disbursement_method, disbursement_transaction_ref, disbursement_legacy_inferred, created_at FROM ad_order_refunds WHERE tenant_id = ? AND workspace_id = ? AND order_id = ? ORDER BY created_at DESC", scope.tenantId, scope.workspaceId, orderId);
+    return all<RefundRow>(this.db, "SELECT id, order_id, payment_submission_id, amount_minor, currency, amount_scale, network, actual_amount_minor, reason, method, transaction_ref, status, requested_by, reviewed_by, reviewed_at, review_note, disbursed_by, disbursed_at, disbursement_method, disbursement_transaction_ref, disbursement_legacy_inferred, created_at FROM ad_order_refunds WHERE tenant_id = ? AND workspace_id = ? AND order_id = ? ORDER BY created_at DESC", scope.tenantId, scope.workspaceId, orderId);
   }
 
   async listPendingRefunds(tenantId: string, workspaceId: string): Promise<RefundRow[]> {
-    return all<RefundRow>(this.db, "SELECT id, order_id, amount_minor, reason, method, transaction_ref, status, requested_by, reviewed_by, reviewed_at, review_note, disbursed_by, disbursed_at, disbursement_method, disbursement_transaction_ref, disbursement_legacy_inferred, created_at FROM ad_order_refunds WHERE tenant_id = ? AND workspace_id = ? AND (status = 'pending_review' OR (status = 'approved' AND disbursed_at IS NULL) OR disbursement_legacy_inferred = 1) ORDER BY created_at ASC LIMIT 200", tenantId, workspaceId);
+    return all<RefundRow>(this.db, "SELECT id, order_id, payment_submission_id, amount_minor, currency, amount_scale, network, actual_amount_minor, reason, method, transaction_ref, status, requested_by, reviewed_by, reviewed_at, review_note, disbursed_by, disbursed_at, disbursement_method, disbursement_transaction_ref, disbursement_legacy_inferred, created_at FROM ad_order_refunds WHERE tenant_id = ? AND workspace_id = ? AND (status = 'pending_review' OR (status = 'approved' AND disbursed_at IS NULL) OR disbursement_legacy_inferred = 1) ORDER BY created_at ASC LIMIT 200", tenantId, workspaceId);
   }
 
   async createRefund(scope: { tenantId: string; workspaceId: string }, actorUserId: string, orderId: string, input: RefundInput, now: string): Promise<string> {
@@ -157,19 +157,30 @@ export class ProductionPaymentRepository {
     // Pending requests reserve funds as well as approved refunds. This single
     // INSERT...SELECT is the atomic reservation point under concurrent requests.
     let result: { meta?: { changes?: number } };
-    try { result = await this.db.prepare(`INSERT INTO ad_order_refunds (id, tenant_id, workspace_id, order_id, amount_minor, reason, method, transaction_ref, idempotency_key, status, requested_by, created_at, updated_at)
-      SELECT ?, ?, ?, o.id, ?, ?, ?, ?, ?, 'pending_review', ?, ?, ? FROM ad_orders o
-      WHERE o.id = ? AND o.tenant_id = ? AND o.workspace_id = ?
+    try { result = await this.db.prepare(`WITH source_payment AS (
+        SELECT p.id FROM payment_submissions p
+        WHERE p.order_id = ? AND p.tenant_id = ? AND p.workspace_id = ? AND p.status = 'approved'
+          AND p.currency = (SELECT o.currency FROM ad_orders o WHERE o.id = p.order_id)
+          AND p.amount_scale = (SELECT o.currency_scale FROM ad_orders o WHERE o.id = p.order_id)
+          AND p.network IS (SELECT o.network FROM ad_orders o WHERE o.id = p.order_id)
+          AND ? <= p.amount_minor
+            - COALESCE((SELECT SUM(r.amount_minor) FROM ad_order_refunds r WHERE r.payment_submission_id = p.id AND r.status IN ('pending_review', 'approved')), 0)
+            - COALESCE((SELECT SUM(r.amount_minor) FROM ad_order_refunds r WHERE r.order_id = p.order_id AND r.payment_submission_id IS NULL AND r.status IN ('pending_review', 'approved')), 0)
+        ORDER BY p.created_at, p.id LIMIT 1
+      )
+      INSERT INTO ad_order_refunds (id, tenant_id, workspace_id, order_id, payment_submission_id, amount_minor, currency, amount_scale, network, reason, method, transaction_ref, idempotency_key, status, requested_by, created_at, updated_at)
+      SELECT ?, ?, ?, o.id, (SELECT id FROM source_payment), ?, o.currency, o.currency_scale, o.network, ?, ?, ?, ?, 'pending_review', ?, ?, ? FROM ad_orders o
+      WHERE o.id = ? AND o.tenant_id = ? AND o.workspace_id = ? AND EXISTS (SELECT 1 FROM source_payment)
         AND ? <= COALESCE((SELECT SUM(p.amount_minor) FROM payment_submissions p WHERE p.tenant_id = ? AND p.workspace_id = ? AND p.order_id = o.id AND p.status = 'approved'), 0)
           - COALESCE((SELECT SUM(r.amount_minor) FROM ad_order_refunds r WHERE r.tenant_id = ? AND r.workspace_id = ? AND r.order_id = o.id AND r.status IN ('pending_review', 'approved')), 0)`)
-      .bind(id, scope.tenantId, scope.workspaceId, input.amountMinor, input.reason, input.method ?? null, input.transactionRef ?? null, idempotencyKey, actorUserId, now, now, orderId, scope.tenantId, scope.workspaceId, input.amountMinor, scope.tenantId, scope.workspaceId, scope.tenantId, scope.workspaceId).run(); }
+      .bind(orderId, scope.tenantId, scope.workspaceId, input.amountMinor, id, scope.tenantId, scope.workspaceId, input.amountMinor, input.reason, input.method ?? null, input.transactionRef ?? null, idempotencyKey, actorUserId, now, now, orderId, scope.tenantId, scope.workspaceId, input.amountMinor, scope.tenantId, scope.workspaceId, scope.tenantId, scope.workspaceId).run(); }
     catch (error) {
       const replay = await this.db.prepare("SELECT id, order_id, amount_minor, reason, method, transaction_ref FROM ad_order_refunds WHERE tenant_id = ? AND workspace_id = ? AND idempotency_key = ? LIMIT 1").bind(scope.tenantId, scope.workspaceId, idempotencyKey).first<{ id: string; order_id: string; amount_minor: number; reason: string; method?: string; transaction_ref?: string }>();
       if (replay && replay.order_id === orderId && replay.amount_minor === input.amountMinor && replay.reason === input.reason && (replay.method ?? undefined) === input.method && (replay.transaction_ref ?? undefined) === input.transactionRef) return replay.id;
       if (replay) throw new BusinessValidationError("IDEMPOTENCY_KEY_CONFLICT", "该退款幂等键已用于不同请求，请刷新后重新发起");
       throw error;
     }
-    if ((result.meta?.changes ?? 0) === 0) throw new BusinessValidationError("REFUND_EXCEEDS_PAID", "退款金额超过已审核付款扣除待审和已批准退款后的可退余额");
+    if ((result.meta?.changes ?? 0) === 0) throw new BusinessValidationError("REFUND_EXCEEDS_PAID", "退款金额超过可退余额，或没有单笔已审核原始收款可覆盖；可将退款拆分为多个申请");
     return id;
   }
 
@@ -184,22 +195,24 @@ export class ProductionPaymentRepository {
     return { orderId: refund.order_id, status };
   }
 
-  async disburseRefund(scope: { tenantId: string; workspaceId: string }, actorUserId: string, refundId: string, input: { method?: string; transactionRef?: string }, now: string): Promise<{ orderId: string; status: string }> {
+  async disburseRefund(scope: { tenantId: string; workspaceId: string }, actorUserId: string, refundId: string, input: { method?: string; transactionRef?: string; actualAmountMinor: number }, now: string): Promise<{ orderId: string; status: string }> {
     const method = refundDisbursementMethod(input.method ?? "bank_transfer");
     if (["bank_transfer", "alipay", "wechat", "crypto"].includes(method) && !input.transactionRef?.trim()) throw new BusinessValidationError("REFUND_DISBURSEMENT_REF_REQUIRED", "银行或电子支付实际出款必须填写转账流水号");
-    const refund = await this.db.prepare("SELECT id, order_id, amount_minor, status, disbursed_at, disbursement_legacy_inferred FROM ad_order_refunds WHERE id = ? AND tenant_id = ? AND workspace_id = ? LIMIT 1").bind(refundId, scope.tenantId, scope.workspaceId).first<RefundRow>();
+    const refund = await this.db.prepare("SELECT id, order_id, amount_minor, currency, amount_scale, network, status, disbursed_at, disbursement_legacy_inferred FROM ad_order_refunds WHERE id = ? AND tenant_id = ? AND workspace_id = ? LIMIT 1").bind(refundId, scope.tenantId, scope.workspaceId).first<RefundRow>();
     if (!refund) throw new BusinessValidationError("REFUND_NOT_FOUND", "退款申请不存在或不属于当前工作空间");
     if (refund.disbursement_legacy_inferred === 1) throw new BusinessValidationError("REFUND_LEGACY_RECONCILIATION_REQUIRED", "这是迁移前的历史退款，必须先人工核对银行流水，不能直接登记或重复出款");
     if (refund.status !== "approved" || refund.disbursed_at) throw new BusinessValidationError("REFUND_NOT_READY_FOR_DISBURSEMENT", "仅可登记已批准且尚未实际退款的申请");
+    const actualAmountMinor = input.actualAmountMinor;
+    if (!Number.isSafeInteger(actualAmountMinor) || actualAmountMinor <= 0 || actualAmountMinor !== refund.amount_minor) throw new BusinessValidationError("REFUND_ACTUAL_AMOUNT_MISMATCH", "实际退回数量必须与已批准的退款数量完全一致；如金额不同，请驳回原申请并按实际金额重新申请、审批");
     const transactionRef = input.transactionRef?.trim();
     if (transactionRef) {
       const duplicate = await this.db.prepare("SELECT id FROM ad_order_refunds WHERE tenant_id = ? AND workspace_id = ? AND disbursement_transaction_ref = ? AND id <> ? LIMIT 1").bind(scope.tenantId, scope.workspaceId, transactionRef, refundId).first<{ id: string }>();
       if (duplicate) throw new BusinessValidationError("DUPLICATE_TRANSACTION_REF", "该出款流水号已用于其他退款记录");
     }
     const statements: D1Bound[] = [
-      this.db.prepare("UPDATE ad_order_refunds SET disbursed_by = ?, disbursed_at = ?, disbursement_method = ?, disbursement_transaction_ref = ?, updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status = 'approved' AND disbursed_at IS NULL").bind(actorUserId, now, method, transactionRef || null, now, refundId, scope.tenantId, scope.workspaceId),
-      this.db.prepare(`INSERT OR IGNORE INTO financial_ledger_entries (id, tenant_id, workspace_id, order_id, entry_type, direction, amount_minor, currency, reason, actor_user_id, created_at)
-        SELECT ?, ?, ?, r.order_id, 'refund', 'debit', r.amount_minor, 'CNY', 'refund_disbursed', ?, ? FROM ad_order_refunds r
+      this.db.prepare("UPDATE ad_order_refunds SET actual_amount_minor = ?, actual_currency = currency, actual_network = network, disbursed_by = ?, disbursed_at = ?, disbursement_method = ?, disbursement_transaction_ref = ?, updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status = 'approved' AND disbursed_at IS NULL").bind(actualAmountMinor, actorUserId, now, method, transactionRef || null, now, refundId, scope.tenantId, scope.workspaceId),
+      this.db.prepare(`INSERT OR IGNORE INTO financial_ledger_entries (id, tenant_id, workspace_id, order_id, payment_submission_id, entry_type, direction, amount_minor, currency, amount_scale, network, reason, actor_user_id, created_at)
+        SELECT ?, ?, ?, r.order_id, r.payment_submission_id, 'refund', 'debit', r.actual_amount_minor, r.actual_currency, r.amount_scale, r.actual_network, 'refund_disbursed', ?, ? FROM ad_order_refunds r
         WHERE r.id = ? AND r.tenant_id = ? AND r.workspace_id = ? AND r.status = 'approved' AND r.disbursed_by = ? AND r.disbursed_at = ?`)
         .bind(`refund:${refundId}:disbursed`, scope.tenantId, scope.workspaceId, actorUserId, now, refundId, scope.tenantId, scope.workspaceId, actorUserId, now),
       this.db.prepare(`UPDATE ad_orders SET payment_status = CASE
@@ -224,15 +237,15 @@ export class ProductionPaymentRepository {
   }
 
   async reconciliation(tenantId: string, workspaceId: string): Promise<Array<Record<string, unknown>>> {
-    return all<Record<string, unknown>>(this.db, `SELECT o.id AS orderId, o.order_no AS orderNo, o.total_due_minor AS dueMinor, COALESCE((SELECT SUM(p.amount_minor) FROM payment_submissions p WHERE p.order_id = o.id AND p.status = 'approved'), 0) AS approvedPaymentMinor, COALESCE((SELECT SUM(r.amount_minor) FROM ad_order_refunds r WHERE r.order_id = o.id AND r.status = 'approved' AND r.disbursed_at IS NOT NULL AND r.disbursement_legacy_inferred = 0), 0) AS disbursedRefundMinor, COALESCE((SELECT SUM(r.amount_minor) FROM ad_order_refunds r WHERE r.order_id = o.id AND r.status = 'approved' AND r.disbursement_legacy_inferred = 1), 0) AS legacyRefundMinor, o.payment_status AS paymentStatus, o.status FROM ad_orders o WHERE o.tenant_id = ? AND o.workspace_id = ? ORDER BY o.updated_at DESC LIMIT 500`, tenantId, workspaceId);
+    return all<Record<string, unknown>>(this.db, `SELECT o.id AS orderId, o.order_no AS orderNo, o.total_due_minor AS dueMinor, o.currency, o.currency_scale AS amountScale, o.network, COALESCE((SELECT SUM(p.amount_minor) FROM payment_submissions p WHERE p.order_id = o.id AND p.status = 'approved' AND p.currency = o.currency AND p.network IS o.network), 0) AS approvedPaymentMinor, COALESCE((SELECT SUM(r.actual_amount_minor) FROM ad_order_refunds r WHERE r.order_id = o.id AND r.status = 'approved' AND r.disbursed_at IS NOT NULL AND r.disbursement_legacy_inferred = 0 AND r.actual_currency = o.currency AND r.actual_network IS o.network), 0) AS disbursedRefundMinor, COALESCE((SELECT SUM(r.amount_minor) FROM ad_order_refunds r WHERE r.order_id = o.id AND r.status = 'approved' AND r.disbursement_legacy_inferred = 1), 0) AS legacyRefundMinor, o.payment_status AS paymentStatus, o.status FROM ad_orders o WHERE o.tenant_id = ? AND o.workspace_id = ? ORDER BY o.updated_at DESC LIMIT 500`, tenantId, workspaceId);
   }
 
   async timeline(scope: { tenantId: string; workspaceId: string }, orderId: string): Promise<Array<Record<string, unknown>>> {
     await this.order(scope, orderId);
     const events = await all<Record<string, unknown>>(this.db, "SELECT created_at AS createdAt, action AS type, object_type AS objectType, object_id AS objectId, after_summary AS details FROM audit_logs WHERE tenant_id = ? AND workspace_id = ? AND object_id = ?", scope.tenantId, scope.workspaceId, orderId);
-    const payments = await all<Record<string, unknown>>(this.db, "SELECT created_at AS createdAt, 'payment' AS type, id AS objectId, status, amount_minor AS amountMinor, transaction_no AS transactionRef FROM payment_submissions WHERE tenant_id = ? AND workspace_id = ? AND order_id = ?", scope.tenantId, scope.workspaceId, orderId);
-    const refunds = await all<Record<string, unknown>>(this.db, "SELECT COALESCE(r.disbursed_at, r.created_at) AS createdAt, 'refund' AS type, r.id AS objectId, r.status, r.amount_minor AS amountMinor, r.reason, r.disbursed_at AS disbursedAt, u.display_name AS disbursedBy, r.disbursement_method AS disbursementMethod, r.disbursement_transaction_ref AS disbursementTransactionRef, r.disbursement_legacy_inferred AS disbursementLegacyInferred FROM ad_order_refunds r LEFT JOIN users u ON u.id = r.disbursed_by WHERE r.tenant_id = ? AND r.workspace_id = ? AND r.order_id = ?", scope.tenantId, scope.workspaceId, orderId);
-    const ledger = await all<Record<string, unknown>>(this.db, "SELECT created_at AS createdAt, 'ledger' AS type, id AS objectId, entry_type AS entryType, direction, amount_minor AS amountMinor, reason FROM financial_ledger_entries WHERE tenant_id = ? AND workspace_id = ? AND order_id = ?", scope.tenantId, scope.workspaceId, orderId);
+    const payments = await all<Record<string, unknown>>(this.db, "SELECT created_at AS createdAt, 'payment' AS type, id AS objectId, status, amount_minor AS amountMinor, currency, amount_scale AS amountScale, network, transaction_no AS transactionRef FROM payment_submissions WHERE tenant_id = ? AND workspace_id = ? AND order_id = ?", scope.tenantId, scope.workspaceId, orderId);
+    const refunds = await all<Record<string, unknown>>(this.db, "SELECT COALESCE(r.disbursed_at, r.created_at) AS createdAt, 'refund' AS type, r.id AS objectId, r.payment_submission_id AS paymentSubmissionId, r.status, COALESCE(r.actual_amount_minor, r.amount_minor) AS amountMinor, r.currency, r.amount_scale AS amountScale, COALESCE(r.actual_network, r.network) AS network, r.reason, r.disbursed_at AS disbursedAt, u.display_name AS disbursedBy, r.disbursement_method AS disbursementMethod, r.disbursement_transaction_ref AS disbursementTransactionRef, r.disbursement_legacy_inferred AS disbursementLegacyInferred FROM ad_order_refunds r LEFT JOIN users u ON u.id = r.disbursed_by WHERE r.tenant_id = ? AND r.workspace_id = ? AND r.order_id = ?", scope.tenantId, scope.workspaceId, orderId);
+    const ledger = await all<Record<string, unknown>>(this.db, "SELECT created_at AS createdAt, 'ledger' AS type, id AS objectId, entry_type AS entryType, direction, amount_minor AS amountMinor, currency, amount_scale AS amountScale, network, reason FROM financial_ledger_entries WHERE tenant_id = ? AND workspace_id = ? AND order_id = ?", scope.tenantId, scope.workspaceId, orderId);
     return [...events, ...payments, ...refunds, ...ledger].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
   }
 }

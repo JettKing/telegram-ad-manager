@@ -438,7 +438,8 @@ app.post("/api/v1/finance/refunds/:refundId/disburse", requireAuth("finance:writ
     const body = await context.req.json<Record<string, unknown>>();
     const method = typeof body.method === "string" ? body.method : "bank_transfer";
     const transactionRef = typeof body.transactionRef === "string" ? body.transactionRef.trim() : undefined;
-    const result = await new ProductionPaymentRepository(env.DB).disburseRefund({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("refundId"), { method, transactionRef }, new Date().toISOString());
+    const actualAmountMinor = body.actualAmountMinor === undefined ? NaN : Number.isSafeInteger(body.actualAmountMinor) ? Number(body.actualAmountMinor) : NaN;
+    const result = await new ProductionPaymentRepository(env.DB).disburseRefund({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("refundId"), { method, transactionRef, actualAmountMinor }, new Date().toISOString());
     return context.json(success(result, requestId(context)));
   } catch (error) { return businessError(context, error, requestId(context)); }
 });

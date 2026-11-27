@@ -93,9 +93,9 @@ export function parseRefundReviewInput(value: unknown): RefundReviewInput {
   return { status, note: stringField(input?.note, "review_note", 1000) };
 }
 
-interface OrderPaymentContext { id: string; receivable_minor: number; payment_status: string; status: OrderStatus }
-interface PaymentRow { id: string; order_id: string; method: string; amount_minor: number; transaction_ref?: string; proof_asset_id?: string; paid_at?: string; status: PaymentStatus; reviewed_by?: string; reviewed_at?: string; review_note?: string; created_at: string }
-interface RefundRow { id: string; order_id: string; amount_minor: number; reason: string; method?: string; transaction_ref?: string; status: RefundStatus; requested_by?: string; reviewed_by?: string; reviewed_at?: string; review_note?: string; created_at: string }
+interface OrderPaymentContext { id: string; receivable_minor: number; currency: string; currency_scale: number; network?: string | null; payment_status: string; status: OrderStatus }
+interface PaymentRow { id: string; order_id: string; method: string; amount_minor: number; currency?: string; amount_scale?: number; network?: string | null; transaction_ref?: string; proof_asset_id?: string; paid_at?: string; status: PaymentStatus; reviewed_by?: string; reviewed_at?: string; review_note?: string; created_at: string }
+interface RefundRow { id: string; order_id: string; amount_minor: number; currency?: string; amount_scale?: number; network?: string | null; reason: string; method?: string; transaction_ref?: string; status: RefundStatus; requested_by?: string; reviewed_by?: string; reviewed_at?: string; review_note?: string; created_at: string }
 
 async function all<T>(db: D1Like, query: string, ...values: unknown[]): Promise<T[]> {
   const prepared = db.prepare(query).bind(...values);
@@ -107,7 +107,7 @@ export class D1PaymentRepository {
   constructor(private readonly db: D1Like) {}
 
   private async order(scope: { tenantId: string; workspaceId: string }, orderId: string): Promise<OrderPaymentContext> {
-    const row = await this.db.prepare("SELECT id, receivable_minor, payment_status, status FROM ad_orders WHERE id = ? AND tenant_id = ? AND workspace_id = ? LIMIT 1").bind(orderId, scope.tenantId, scope.workspaceId).first<OrderPaymentContext>();
+    const row = await this.db.prepare("SELECT id, receivable_minor, currency, currency_scale, network, payment_status, status FROM ad_orders WHERE id = ? AND tenant_id = ? AND workspace_id = ? LIMIT 1").bind(orderId, scope.tenantId, scope.workspaceId).first<OrderPaymentContext>();
     if (!row) throw new BusinessValidationError("ORDER_NOT_FOUND", "订单不存在或不属于当前工作空间");
     return row;
   }
@@ -129,14 +129,14 @@ export class D1PaymentRepository {
   }
 
   async listPendingPayments(tenantId: string, workspaceId: string): Promise<PaymentRow[]> {
-    return all<PaymentRow>(this.db, `SELECT p.id, p.order_id, p.method, p.amount_minor, p.transaction_ref, p.proof_asset_id, p.paid_at, p.status, p.reviewed_by, p.reviewed_at, p.review_note, p.created_at
+    return all<PaymentRow>(this.db, `SELECT p.id, p.order_id, p.method, p.amount_minor, p.currency, p.amount_scale, p.network, p.transaction_ref, p.proof_asset_id, p.paid_at, p.status, p.reviewed_by, p.reviewed_at, p.review_note, p.created_at
       FROM ad_order_payments p JOIN ad_orders o ON o.id = p.order_id
       WHERE o.tenant_id = ? AND o.workspace_id = ? AND p.status = 'pending_review' ORDER BY p.created_at ASC LIMIT 200`, tenantId, workspaceId);
   }
 
   async listOrderPayments(scope: { tenantId: string; workspaceId: string }, orderId: string): Promise<PaymentRow[]> {
     await this.order(scope, orderId);
-    return all<PaymentRow>(this.db, "SELECT id, order_id, method, amount_minor, transaction_ref, proof_asset_id, paid_at, status, reviewed_by, reviewed_at, review_note, created_at FROM ad_order_payments WHERE order_id = ? ORDER BY created_at DESC", orderId);
+    return all<PaymentRow>(this.db, "SELECT id, order_id, method, amount_minor, currency, amount_scale, network, transaction_ref, proof_asset_id, paid_at, status, reviewed_by, reviewed_at, review_note, created_at FROM ad_order_payments WHERE order_id = ? ORDER BY created_at DESC", orderId);
   }
 
   async createPayment(scope: { tenantId: string; workspaceId: string }, actorUserId: string, orderId: string, input: PaymentInput, now: string): Promise<string> {
@@ -147,7 +147,7 @@ export class D1PaymentRepository {
     const outstanding = order.receivable_minor - await this.approvedOrPendingPayments(orderId);
     if (input.amountMinor > outstanding) throw new BusinessValidationError("PAYMENT_EXCEEDS_RECEIVABLE", "付款金额超过未核销应收金额");
     const paymentId = crypto.randomUUID();
-    await this.db.prepare("INSERT INTO ad_order_payments (id, order_id, method, amount_minor, transaction_ref, proof_asset_id, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending_review', ?)").bind(paymentId, orderId, input.method, input.amountMinor, input.transactionRef ?? null, input.proofAssetId ?? null, now).run();
+    await this.db.prepare("INSERT INTO ad_order_payments (id, order_id, method, amount_minor, currency, amount_scale, network, transaction_ref, proof_asset_id, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_review', ?)").bind(paymentId, orderId, input.method, input.amountMinor, order.currency, order.currency_scale, order.network ?? null, input.transactionRef ?? null, input.proofAssetId ?? null, now).run();
     await this.db.prepare("UPDATE ad_orders SET payment_status = 'pending_review', updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ?").bind(now, orderId, scope.tenantId, scope.workspaceId).run();
     await this.db.prepare("INSERT INTO ad_order_revisions (id, order_id, actor_user_id, reason, before_json, after_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(crypto.randomUUID(), orderId, actorUserId, "payment_proof_submitted", JSON.stringify({ paymentStatus: order.payment_status }), JSON.stringify({ paymentStatus: "pending_review", paymentId }), now).run();
     return paymentId;
@@ -189,7 +189,7 @@ export class D1PaymentRepository {
     const available = order.receivable_minor - await this.approvedRefunds(orderId);
     if (input.amountMinor > available) throw new BusinessValidationError("REFUND_EXCEEDS_PAID", "退款金额超过可退款金额");
     const refundId = crypto.randomUUID();
-    await this.db.prepare("INSERT INTO ad_order_refunds (id, order_id, amount_minor, reason, method, transaction_ref, status, requested_by, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending_review', ?, ?)").bind(refundId, orderId, input.amountMinor, input.reason, input.method ?? null, input.transactionRef ?? null, actorUserId, now).run();
+    await this.db.prepare("INSERT INTO ad_order_refunds (id, order_id, amount_minor, currency, amount_scale, network, reason, method, transaction_ref, status, requested_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_review', ?, ?)").bind(refundId, orderId, input.amountMinor, order.currency, order.currency_scale, order.network ?? null, input.reason, input.method ?? null, input.transactionRef ?? null, actorUserId, now).run();
     await this.db.prepare("INSERT INTO ad_order_revisions (id, order_id, actor_user_id, reason, before_json, after_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(crypto.randomUUID(), orderId, actorUserId, "refund_requested", JSON.stringify({ paymentStatus: order.payment_status }), JSON.stringify({ refundId, amountMinor: input.amountMinor, status: "pending_review" }), now).run();
     return refundId;
   }

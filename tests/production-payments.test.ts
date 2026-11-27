@@ -96,9 +96,16 @@ describe("production finance write safety", () => {
     expect(queries.some((query) => query.includes("financial_ledger_entries"))).toBe(false);
   });
 
+  it("rejects a missing or different actual refund amount before writing any ledger entry", async () => {
+    const { db, batches } = mockDb({ refund: { id: "refund-1", order_id: "order-1", amount_minor: 5000, status: "approved", disbursed_at: null } });
+    await expect(new ProductionPaymentRepository(db).disburseRefund(scope, "finance-1", "refund-1", { method: "bank_transfer", transactionRef: "RF-1", actualAmountMinor: 4999 }, "2026-11-27T00:00:00.000Z"))
+      .rejects.toMatchObject({ code: "REFUND_ACTUAL_AMOUNT_MISMATCH" });
+    expect(batches).toHaveLength(0);
+  });
+
   it("records an actual refund disbursement atomically with ledger and order-state updates", async () => {
     const { db, batches, bindings } = mockDb({ refund: { id: "refund-1", order_id: "order-1", amount_minor: 5000, status: "approved", disbursed_at: null } });
-    const result = await new ProductionPaymentRepository(db).disburseRefund(scope, "finance-1", "refund-1", { method: "bank_transfer", transactionRef: "RF-1" }, "2026-11-27T00:00:00.000Z");
+    const result = await new ProductionPaymentRepository(db).disburseRefund(scope, "finance-1", "refund-1", { method: "bank_transfer", transactionRef: "RF-1", actualAmountMinor: 5000 }, "2026-11-27T00:00:00.000Z");
     expect(result).toEqual({ orderId: "order-1", status: "disbursed" });
     expect(batches).toHaveLength(1);
     expect(batches[0]).toHaveLength(3);
@@ -111,7 +118,7 @@ describe("production finance write safety", () => {
       refund: { id: "refund-2", order_id: "order-1", amount_minor: 5000, status: "approved", disbursed_at: null },
       duplicateDisbursementRef: { id: "refund-1" },
     });
-    await expect(new ProductionPaymentRepository(db).disburseRefund(scope, "finance-1", "refund-2", { method: "bank_transfer", transactionRef: "RF-1" }, "2026-11-27T00:00:00.000Z"))
+    await expect(new ProductionPaymentRepository(db).disburseRefund(scope, "finance-1", "refund-2", { method: "bank_transfer", transactionRef: "RF-1", actualAmountMinor: 5000 }, "2026-11-27T00:00:00.000Z"))
       .rejects.toMatchObject({ code: "DUPLICATE_TRANSACTION_REF" });
     expect(batches).toHaveLength(0);
   });

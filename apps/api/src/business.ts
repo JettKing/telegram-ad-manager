@@ -1,4 +1,7 @@
 import type { D1Like } from "@tg-ad-manager/telegram";
+import { resolveAsset, type AssetCode } from "./money.js";
+import { BusinessValidationError } from "./errors.js";
+export { BusinessValidationError } from "./errors.js";
 
 export type CustomerStatus = "new" | "normal" | "long_term" | "vip" | "potential" | "risk" | "inactive";
 export type OrderStatus = "draft" | "pending_payment" | "paid" | "pending_review" | "approved" | "scheduled" | "publishing" | "published" | "completed" | "cancelled" | "refunded" | "partially_refunded" | "failed";
@@ -28,6 +31,9 @@ export interface PackageInput {
   pinDurationSeconds?: number;
   publishIntervalSeconds?: number;
   priceMinor: number;
+  currency: AssetCode;
+  currencyScale: number;
+  network: string | null;
   discountPriceMinor?: number;
   autoUnpin?: boolean;
   attemptAutoDelete?: boolean;
@@ -41,13 +47,6 @@ export interface CreateOrderInput {
   packageId: string;
   discountMinor?: number;
   content: unknown;
-}
-
-export class BusinessValidationError extends Error {
-  constructor(public readonly code: string, message: string) {
-    super(message);
-    this.name = "BusinessValidationError";
-  }
 }
 
 const customerStatuses = new Set<CustomerStatus>(["new", "normal", "long_term", "vip", "potential", "risk", "inactive"]);
@@ -80,6 +79,7 @@ export function parsePackageInput(value: unknown): PackageInput {
   const adType = optionalString(input?.adType, 50);
   if (!name || !adType) throw new BusinessValidationError("PACKAGE_FIELDS_REQUIRED", "套餐名称和广告类型不能为空");
   const priceMinor = integer(input?.priceMinor, "priceMinor");
+  const asset = resolveAsset(input?.currency ?? "CNY", input?.network);
   const discountPriceMinor = input?.discountPriceMinor === undefined ? undefined : integer(input.discountPriceMinor, "discountPriceMinor");
   if (discountPriceMinor !== undefined && discountPriceMinor > priceMinor) throw new BusinessValidationError("INVALID_PACKAGE_DISCOUNT", "折扣价不能高于原价");
   const publishCount = input?.publishCount === undefined ? 1 : integer(input.publishCount, "publishCount", 1);
@@ -94,6 +94,9 @@ export function parsePackageInput(value: unknown): PackageInput {
     pinDurationSeconds: input?.pinDurationSeconds === undefined ? undefined : integer(input.pinDurationSeconds, "pinDurationSeconds"),
     publishIntervalSeconds: input?.publishIntervalSeconds === undefined ? undefined : integer(input.publishIntervalSeconds, "publishIntervalSeconds"),
     priceMinor,
+    currency: asset.currency,
+    currencyScale: asset.scale,
+    network: asset.network,
     discountPriceMinor,
     autoUnpin: input?.autoUnpin === true,
     attemptAutoDelete: input?.attemptAutoDelete === true,
@@ -140,8 +143,8 @@ function orderNumber(now: Date): string {
 }
 
 interface CustomerRow { id: string; name: string; contact?: string; telegram_user_id?: string; telegram_username?: string; source?: string; notes?: string; status: CustomerStatus; total_spend_minor: number; last_order_at?: string; created_at: string; updated_at: string }
-interface PackageRow { id: string; name: string; description?: string; ad_type: string; publish_count: number; price_minor: number; discount_price_minor?: number; is_enabled: number; is_public: number; created_at: string; updated_at: string }
-interface OrderRow { id: string; order_no: string; customer_id: string; channel_id: string; package_id: string; amount_minor: number; discount_minor: number; receivable_minor: number; payment_status: string; status: OrderStatus; content_json: string; created_at: string; updated_at: string }
+interface PackageRow { id: string; name: string; description?: string; ad_type: string; publish_count: number; price_minor: number; currency: AssetCode; currency_scale: number; network?: string | null; discount_price_minor?: number; is_enabled: number; is_public: number; created_at: string; updated_at: string }
+interface OrderRow { id: string; order_no: string; customer_id: string; channel_id: string; package_id: string; amount_minor: number; discount_minor: number; receivable_minor: number; currency: AssetCode; currency_scale: number; network?: string | null; payment_status: string; status: OrderStatus; content_json: string; created_at: string; updated_at: string }
 
 async function all<T>(db: D1Like, query: string, ...values: unknown[]): Promise<T[]> {
   const prepared = db.prepare(query).bind(...values);
@@ -168,24 +171,24 @@ export class D1BusinessRepository {
   }
 
   async listPackages(tenantId: string, workspaceId: string): Promise<PackageRow[]> {
-    return all<PackageRow>(this.db, "SELECT id, name, description, ad_type, publish_count, price_minor, discount_price_minor, is_enabled, is_public, created_at, updated_at FROM ad_packages WHERE tenant_id = ? AND workspace_id = ? ORDER BY updated_at DESC LIMIT 200", tenantId, workspaceId);
+    return all<PackageRow>(this.db, "SELECT id, name, description, ad_type, publish_count, price_minor, currency, currency_scale, network, discount_price_minor, is_enabled, is_public, created_at, updated_at FROM ad_packages WHERE tenant_id = ? AND workspace_id = ? ORDER BY updated_at DESC LIMIT 200", tenantId, workspaceId);
   }
 
   async createPackage(scope: { tenantId: string; workspaceId: string }, input: PackageInput, now: string): Promise<string> {
     const id = crypto.randomUUID();
-    await this.db.prepare("INSERT INTO ad_packages (id, tenant_id, workspace_id, name, description, ad_type, publish_count, display_duration_seconds, pin_duration_seconds, publish_interval_seconds, price_minor, discount_price_minor, auto_unpin, attempt_auto_delete, delete_failure_policy, is_public, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, scope.tenantId, scope.workspaceId, input.name, input.description ?? null, input.adType, input.publishCount ?? 1, input.displayDurationSeconds ?? null, input.pinDurationSeconds ?? null, input.publishIntervalSeconds ?? null, input.priceMinor, input.discountPriceMinor ?? null, input.autoUnpin ? 1 : 0, input.attemptAutoDelete ? 1 : 0, input.deleteFailurePolicy ?? "manual", input.isPublic ? 1 : 0, now, now).run();
+    await this.db.prepare("INSERT INTO ad_packages (id, tenant_id, workspace_id, name, description, ad_type, publish_count, display_duration_seconds, pin_duration_seconds, publish_interval_seconds, price_minor, discount_price_minor, auto_unpin, attempt_auto_delete, delete_failure_policy, is_public, currency, currency_scale, network, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, scope.tenantId, scope.workspaceId, input.name, input.description ?? null, input.adType, input.publishCount ?? 1, input.displayDurationSeconds ?? null, input.pinDurationSeconds ?? null, input.publishIntervalSeconds ?? null, input.priceMinor, input.discountPriceMinor ?? null, input.autoUnpin ? 1 : 0, input.attemptAutoDelete ? 1 : 0, input.deleteFailurePolicy ?? "manual", input.isPublic ? 1 : 0, input.currency, input.currencyScale, input.network, now, now).run();
     return id;
   }
 
   async updatePackage(scope: { tenantId: string; workspaceId: string }, packageId: string, input: PackageInput, now: string): Promise<boolean> {
-    const result = await this.db.prepare("UPDATE ad_packages SET name = ?, description = ?, ad_type = ?, publish_count = ?, display_duration_seconds = ?, pin_duration_seconds = ?, publish_interval_seconds = ?, price_minor = ?, discount_price_minor = ?, auto_unpin = ?, attempt_auto_delete = ?, delete_failure_policy = ?, is_public = ?, updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ?").bind(input.name, input.description ?? null, input.adType, input.publishCount ?? 1, input.displayDurationSeconds ?? null, input.pinDurationSeconds ?? null, input.publishIntervalSeconds ?? null, input.priceMinor, input.discountPriceMinor ?? null, input.autoUnpin ? 1 : 0, input.attemptAutoDelete ? 1 : 0, input.deleteFailurePolicy ?? "manual", input.isPublic ? 1 : 0, now, packageId, scope.tenantId, scope.workspaceId).run();
+    const result = await this.db.prepare("UPDATE ad_packages SET name = ?, description = ?, ad_type = ?, publish_count = ?, display_duration_seconds = ?, pin_duration_seconds = ?, publish_interval_seconds = ?, price_minor = ?, discount_price_minor = ?, auto_unpin = ?, attempt_auto_delete = ?, delete_failure_policy = ?, is_public = ?, currency = ?, currency_scale = ?, network = ?, updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ?").bind(input.name, input.description ?? null, input.adType, input.publishCount ?? 1, input.displayDurationSeconds ?? null, input.pinDurationSeconds ?? null, input.publishIntervalSeconds ?? null, input.priceMinor, input.discountPriceMinor ?? null, input.autoUnpin ? 1 : 0, input.attemptAutoDelete ? 1 : 0, input.deleteFailurePolicy ?? "manual", input.isPublic ? 1 : 0, input.currency, input.currencyScale, input.network, now, packageId, scope.tenantId, scope.workspaceId).run();
     return (result.meta?.changes ?? 0) > 0;
   }
 
-  private async assertOrderReferences(scope: { tenantId: string; workspaceId: string }, input: CreateOrderInput, content: OrderContent): Promise<{ amountMinor: number }> {
+  private async assertOrderReferences(scope: { tenantId: string; workspaceId: string }, input: CreateOrderInput, content: OrderContent): Promise<{ amountMinor: number; currency: AssetCode; currencyScale: number; network: string | null }> {
     const customer = await this.db.prepare("SELECT id FROM customers WHERE id = ? AND tenant_id = ? AND workspace_id = ? LIMIT 1").bind(input.customerId, scope.tenantId, scope.workspaceId).first<{ id: string }>();
     if (!customer) throw new BusinessValidationError("CUSTOMER_NOT_FOUND", "客户不存在或不属于当前工作空间");
-    const packageRow = await this.db.prepare("SELECT id, price_minor, discount_price_minor FROM ad_packages WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND is_enabled = 1 LIMIT 1").bind(input.packageId, scope.tenantId, scope.workspaceId).first<{ id: string; price_minor: number; discount_price_minor?: number }>();
+    const packageRow = await this.db.prepare("SELECT id, price_minor, discount_price_minor, currency, currency_scale, network FROM ad_packages WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND is_enabled = 1 LIMIT 1").bind(input.packageId, scope.tenantId, scope.workspaceId).first<{ id: string; price_minor: number; discount_price_minor?: number; currency: AssetCode; currency_scale: number; network: string | null }>();
     if (!packageRow) throw new BusinessValidationError("PACKAGE_NOT_FOUND", "套餐不存在、已停用或不属于当前工作空间");
     const channel = await this.db.prepare("SELECT id FROM telegram_channels WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status = 'active' LIMIT 1").bind(input.channelId, scope.tenantId, scope.workspaceId).first<{ id: string }>();
     if (!channel) throw new BusinessValidationError("CHANNEL_NOT_READY", "频道不存在、未验证或不属于当前工作空间");
@@ -193,7 +196,7 @@ export class D1BusinessRepository {
       const assets = await all<{ id: string }>(this.db, `SELECT id FROM media_assets WHERE tenant_id = ? AND workspace_id = ? AND status = 'ready' AND id IN (${content.assetIds.map(() => "?").join(",")})`, scope.tenantId, scope.workspaceId, ...content.assetIds);
       if (assets.length !== content.assetIds.length) throw new BusinessValidationError("MEDIA_ASSET_NOT_READY", "存在不属于当前工作空间或尚未 ready 的素材");
     }
-    return { amountMinor: packageRow.discount_price_minor ?? packageRow.price_minor };
+    return { amountMinor: packageRow.discount_price_minor ?? packageRow.price_minor, currency: packageRow.currency, currencyScale: packageRow.currency_scale, network: packageRow.network };
   }
 
   async createOrder(scope: { tenantId: string; workspaceId: string }, actorUserId: string, input: CreateOrderInput, now: string): Promise<{ orderId: string; orderNo: string; receivableMinor: number }> {
@@ -204,18 +207,18 @@ export class D1BusinessRepository {
     const orderId = crypto.randomUUID();
     const orderNo = orderNumber(new Date(now));
     const receivableMinor = refs.amountMinor - discountMinor;
-    await this.db.prepare("INSERT INTO ad_orders (id, order_no, tenant_id, workspace_id, customer_id, channel_id, package_id, amount_minor, discount_minor, receivable_minor, payment_status, status, content_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unpaid', 'draft', ?, ?, ?)").bind(orderId, orderNo, scope.tenantId, scope.workspaceId, input.customerId, input.channelId, input.packageId, refs.amountMinor, discountMinor, receivableMinor, JSON.stringify(content), now, now).run();
+    await this.db.prepare("INSERT INTO ad_orders (id, order_no, tenant_id, workspace_id, customer_id, channel_id, package_id, amount_minor, discount_minor, receivable_minor, currency, currency_scale, network, payment_status, status, content_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unpaid', 'draft', ?, ?, ?)").bind(orderId, orderNo, scope.tenantId, scope.workspaceId, input.customerId, input.channelId, input.packageId, refs.amountMinor, discountMinor, receivableMinor, refs.currency, refs.currencyScale, refs.network, JSON.stringify(content), now, now).run();
     for (const [sortOrder, assetId] of content.assetIds.entries()) await this.db.prepare("INSERT INTO ad_order_media_refs (order_id, media_asset_id, role, sort_order) VALUES (?, ?, ?, ?)").bind(orderId, assetId, "content", sortOrder).run();
     await this.db.prepare("INSERT INTO ad_order_revisions (id, order_id, actor_user_id, reason, before_json, after_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(crypto.randomUUID(), orderId, actorUserId, "created", "{}", JSON.stringify(content), now).run();
     return { orderId, orderNo, receivableMinor };
   }
 
   async listOrders(tenantId: string, workspaceId: string): Promise<OrderRow[]> {
-    return all<OrderRow>(this.db, "SELECT id, order_no, customer_id, channel_id, package_id, amount_minor, discount_minor, receivable_minor, payment_status, status, content_json, created_at, updated_at FROM ad_orders WHERE tenant_id = ? AND workspace_id = ? ORDER BY updated_at DESC LIMIT 200", tenantId, workspaceId);
+    return all<OrderRow>(this.db, "SELECT id, order_no, customer_id, channel_id, package_id, amount_minor, discount_minor, receivable_minor, currency, currency_scale, network, payment_status, status, content_json, created_at, updated_at FROM ad_orders WHERE tenant_id = ? AND workspace_id = ? ORDER BY updated_at DESC LIMIT 200", tenantId, workspaceId);
   }
 
   async getOrder(scope: { tenantId: string; workspaceId: string }, orderId: string): Promise<OrderRow | null> {
-    return this.db.prepare("SELECT id, order_no, customer_id, channel_id, package_id, amount_minor, discount_minor, receivable_minor, payment_status, status, content_json, created_at, updated_at FROM ad_orders WHERE id = ? AND tenant_id = ? AND workspace_id = ? LIMIT 1").bind(orderId, scope.tenantId, scope.workspaceId).first<OrderRow>();
+    return this.db.prepare("SELECT id, order_no, customer_id, channel_id, package_id, amount_minor, discount_minor, receivable_minor, currency, currency_scale, network, payment_status, status, content_json, created_at, updated_at FROM ad_orders WHERE id = ? AND tenant_id = ? AND workspace_id = ? LIMIT 1").bind(orderId, scope.tenantId, scope.workspaceId).first<OrderRow>();
   }
 
   async updateOrderContent(scope: { tenantId: string; workspaceId: string }, actorUserId: string, orderId: string, rawContent: unknown, reason: string, now: string): Promise<boolean> {
