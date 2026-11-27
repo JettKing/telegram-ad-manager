@@ -1,6 +1,14 @@
 import type { D1Like } from "@tg-ad-manager/telegram";
 import { BusinessValidationError, canTransitionOrder, type OrderStatus } from "./business.js";
 
+const allowedPaymentMethods = ["wechat", "alipay", "crypto"] as const;
+
+export function assertPaymentMethod(value: string): void {
+  if (!allowedPaymentMethods.includes(value as (typeof allowedPaymentMethods)[number])) {
+    throw new BusinessValidationError("INVALID_PAYMENT_METHOD", "支付方式仅支持微信、支付宝或数字货币");
+  }
+}
+
 export type PaymentStatus = "pending_review" | "approved" | "rejected";
 export type RefundStatus = "pending_review" | "approved" | "rejected";
 
@@ -49,8 +57,10 @@ function amount(value: unknown, field: string): number {
 
 export function parsePaymentInput(value: unknown): PaymentInput {
   const input = object(value);
+  const method = stringField(input?.method, "payment_method", 50, true)!;
+  assertPaymentMethod(method);
   return {
-    method: stringField(input?.method, "payment_method", 50, true)!,
+    method,
     amountMinor: amount(input?.amountMinor, "amountMinor"),
     ...(input?.idempotencyKey !== undefined ? { idempotencyKey: stringField(input.idempotencyKey, "idempotency_key", 120, true)! } : {}),
     transactionRef: stringField(input?.transactionRef, "transaction_ref", 255),
@@ -130,6 +140,7 @@ export class D1PaymentRepository {
   }
 
   async createPayment(scope: { tenantId: string; workspaceId: string }, actorUserId: string, orderId: string, input: PaymentInput, now: string): Promise<string> {
+    assertPaymentMethod(input.method);
     const order = await this.order(scope, orderId);
     if (!["pending_payment", "pending_review"].includes(order.status)) throw new BusinessValidationError("ORDER_PAYMENT_NOT_OPEN", "当前订单状态不接受付款凭证");
     await this.proofAsset(scope, input.proofAssetId);

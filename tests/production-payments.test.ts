@@ -118,7 +118,7 @@ describe("production finance write safety", () => {
 
   it("reserves payment receivable in the same insert statement and counts rejected transaction refs as occupied", async () => {
     const { db, queries, batches } = mockDb();
-    await new ProductionPaymentRepository(db).createPayment(scope, "user-1", "order-1", { idempotencyKey: "payment-key-1", amountMinor: 5000, method: "bank_transfer", transactionRef: "TX-1" }, "2026-11-27T00:00:00.000Z");
+    await new ProductionPaymentRepository(db).createPayment(scope, "user-1", "order-1", { idempotencyKey: "payment-key-1", amountMinor: 5000, method: "wechat", transactionRef: "TX-1" }, "2026-11-27T00:00:00.000Z");
     const duplicate = queries.find((query) => query.includes("SELECT id FROM payment_submissions") && query.includes("transaction_no")) ?? "";
     const insert = queries.find((query) => query.includes("INSERT INTO payment_submissions")) ?? "";
     expect(duplicate).not.toContain("status IN");
@@ -132,18 +132,26 @@ describe("production finance write safety", () => {
 
   it("rejects an over-limit insert without performing a partial order-status write", async () => {
     const { db, batches } = mockDb({ batchChanges: [0, 0] });
-    await expect(new ProductionPaymentRepository(db).createPayment(scope, "user-1", "order-1", { idempotencyKey: "payment-key-2", amountMinor: 15000, method: "bank_transfer" }, "2026-11-27T00:00:00.000Z"))
+    await expect(new ProductionPaymentRepository(db).createPayment(scope, "user-1", "order-1", { idempotencyKey: "payment-key-2", amountMinor: 15000, method: "wechat" }, "2026-11-27T00:00:00.000Z"))
       .rejects.toMatchObject({ code: "PAYMENT_EXCEEDS_RECEIVABLE" });
     expect(batches[0]).toHaveLength(2);
   });
 
   it("returns the original payment on an exact idempotency replay and rejects a changed payload", async () => {
-    const existing = { id: "payment-existing", order_id: "order-1", amount_minor: 5000, payment_method: "bank_transfer", transaction_no: "TX-1", proof_file_ref: null };
+    const existing = { id: "payment-existing", order_id: "order-1", amount_minor: 5000, payment_method: "wechat", transaction_no: "TX-1", proof_file_ref: null };
     const { db, batches } = mockDb({ paymentIdempotency: existing });
     const repo = new ProductionPaymentRepository(db);
-    expect(await repo.createPayment(scope, "user-1", "order-1", { idempotencyKey: "same-key", amountMinor: 5000, method: "bank_transfer", transactionRef: "TX-1" }, "2026-11-27T00:00:00.000Z")).toBe("payment-existing");
-    await expect(repo.createPayment(scope, "user-1", "order-1", { idempotencyKey: "same-key", amountMinor: 6000, method: "bank_transfer", transactionRef: "TX-1" }, "2026-11-27T00:00:00.000Z"))
+    expect(await repo.createPayment(scope, "user-1", "order-1", { idempotencyKey: "same-key", amountMinor: 5000, method: "wechat", transactionRef: "TX-1" }, "2026-11-27T00:00:00.000Z")).toBe("payment-existing");
+    await expect(repo.createPayment(scope, "user-1", "order-1", { idempotencyKey: "same-key", amountMinor: 6000, method: "wechat", transactionRef: "TX-1" }, "2026-11-27T00:00:00.000Z"))
       .rejects.toMatchObject({ code: "IDEMPOTENCY_KEY_CONFLICT" });
+    expect(batches).toHaveLength(0);
+  });
+
+  it("rejects removed payment methods before database writes", async () => {
+    const { db, queries, batches } = mockDb();
+    await expect(new ProductionPaymentRepository(db).createPayment(scope, "user-1", "order-1", { idempotencyKey: "legacy-method", amountMinor: 1000, method: "bank_transfer" }, "2026-11-27T00:00:00.000Z"))
+      .rejects.toMatchObject({ code: "INVALID_PAYMENT_METHOD" });
+    expect(queries).toHaveLength(0);
     expect(batches).toHaveLength(0);
   });
 });

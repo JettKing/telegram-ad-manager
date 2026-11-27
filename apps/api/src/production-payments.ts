@@ -1,6 +1,6 @@
 import type { D1Like } from "@tg-ad-manager/telegram";
 import { BusinessValidationError, type OrderStatus } from "./business.js";
-import type { PaymentInput, PaymentReviewInput, RefundInput, RefundReviewInput } from "./payments.js";
+import { assertPaymentMethod, type PaymentInput, type PaymentReviewInput, type RefundInput, type RefundReviewInput } from "./payments.js";
 
 interface OrderPaymentContext { id: string; receivable_minor: number; payment_status: string; status: OrderStatus; customer_id: string }
 interface PaymentRow { id: string; order_id: string; method: string; amount_minor: number; transaction_ref?: string; proof_asset_id?: string; paid_at?: string; status: "pending_review" | "approved" | "rejected"; reviewed_by?: string; reviewed_at?: string; review_note?: string; created_at: string }
@@ -9,7 +9,7 @@ interface D1Bound { first<T>(): Promise<T | null>; all?<T>(): Promise<{ results:
 interface BatchResult { meta?: { changes?: number } }
 
 async function all<T>(db: D1Like, query: string, ...values: unknown[]): Promise<T[]> { const prepared = db.prepare(query).bind(...values); return prepared.all ? (await prepared.all<T>()).results : []; }
-function paymentMethod(value: string): string { return ["bank_transfer", "alipay", "wechat", "cash", "crypto", "other"].includes(value) ? value : "other"; }
+function refundDisbursementMethod(value: string): string { return ["bank_transfer", "alipay", "wechat", "cash", "crypto", "other"].includes(value) ? value : "other"; }
 
 export class ProductionPaymentRepository {
   constructor(private readonly db: D1Like) {}
@@ -43,11 +43,12 @@ export class ProductionPaymentRepository {
   }
 
   async createPayment(scope: { tenantId: string; workspaceId: string }, actorUserId: string, orderId: string, input: PaymentInput, now: string): Promise<string> {
+    assertPaymentMethod(input.method);
     const idempotencyKey = input.idempotencyKey?.trim();
     if (!idempotencyKey) throw new BusinessValidationError("IDEMPOTENCY_KEY_REQUIRED", "付款请求必须包含幂等键");
     const existing = await this.db.prepare("SELECT id, order_id, amount_minor, payment_method, transaction_no, proof_file_ref FROM payment_submissions WHERE tenant_id = ? AND workspace_id = ? AND idempotency_key = ? LIMIT 1").bind(scope.tenantId, scope.workspaceId, idempotencyKey).first<{ id: string; order_id: string; amount_minor: number; payment_method: string; transaction_no?: string; proof_file_ref?: string }>();
     if (existing) {
-      const sameRequest = existing.order_id === orderId && existing.amount_minor === input.amountMinor && existing.payment_method === paymentMethod(input.method) && (existing.transaction_no ?? undefined) === input.transactionRef && (existing.proof_file_ref ?? undefined) === input.proofAssetId;
+      const sameRequest = existing.order_id === orderId && existing.amount_minor === input.amountMinor && existing.payment_method === input.method && (existing.transaction_no ?? undefined) === input.transactionRef && (existing.proof_file_ref ?? undefined) === input.proofAssetId;
       if (!sameRequest) throw new BusinessValidationError("IDEMPOTENCY_KEY_CONFLICT", "该付款幂等键已用于不同请求，请刷新后重新发起");
       return existing.id;
     }
@@ -69,7 +70,7 @@ export class ProductionPaymentRepository {
       SELECT ?, ?, ?, o.id, o.customer_id, ?, 'CNY', ?, ?, ?, NULL, ?, 'submitted', ?, ?, ? FROM ad_orders o
       WHERE o.id = ? AND o.tenant_id = ? AND o.workspace_id = ? AND o.status IN ('pending_payment', 'pending_review')
         AND ? <= o.total_due_minor - COALESCE((SELECT SUM(p.amount_minor) FROM payment_submissions p WHERE p.tenant_id = ? AND p.workspace_id = ? AND p.order_id = o.id AND p.status IN ('submitted', 'approved')), 0)`)
-      .bind(id, scope.tenantId, scope.workspaceId, input.amountMinor, paymentMethod(input.method), input.transactionRef ?? null, input.proofAssetId ?? null, null, idempotencyKey, now, now, orderId, scope.tenantId, scope.workspaceId, input.amountMinor, scope.tenantId, scope.workspaceId);
+      .bind(id, scope.tenantId, scope.workspaceId, input.amountMinor, input.method, input.transactionRef ?? null, input.proofAssetId ?? null, null, idempotencyKey, now, now, orderId, scope.tenantId, scope.workspaceId, input.amountMinor, scope.tenantId, scope.workspaceId);
     const updateOrder = this.db.prepare(`UPDATE ad_orders SET payment_status = 'pending_payment', updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ?
       AND EXISTS (SELECT 1 FROM payment_submissions p WHERE p.id = ? AND p.tenant_id = ? AND p.workspace_id = ? AND p.status = 'submitted')`)
       .bind(now, orderId, scope.tenantId, scope.workspaceId, id, scope.tenantId, scope.workspaceId);
@@ -78,7 +79,7 @@ export class ProductionPaymentRepository {
     catch (error) {
       const replay = await this.db.prepare("SELECT id, order_id, amount_minor, payment_method, transaction_no, proof_file_ref FROM payment_submissions WHERE tenant_id = ? AND workspace_id = ? AND idempotency_key = ? LIMIT 1").bind(scope.tenantId, scope.workspaceId, idempotencyKey).first<{ id: string; order_id: string; amount_minor: number; payment_method: string; transaction_no?: string; proof_file_ref?: string }>();
       if (replay) {
-        const sameRequest = replay.order_id === orderId && replay.amount_minor === input.amountMinor && replay.payment_method === paymentMethod(input.method) && (replay.transaction_no ?? undefined) === input.transactionRef && (replay.proof_file_ref ?? undefined) === input.proofAssetId;
+        const sameRequest = replay.order_id === orderId && replay.amount_minor === input.amountMinor && replay.payment_method === input.method && (replay.transaction_no ?? undefined) === input.transactionRef && (replay.proof_file_ref ?? undefined) === input.proofAssetId;
         if (sameRequest) return replay.id;
         throw new BusinessValidationError("IDEMPOTENCY_KEY_CONFLICT", "该付款幂等键已用于不同请求，请刷新后重新发起");
       }
@@ -184,7 +185,7 @@ export class ProductionPaymentRepository {
   }
 
   async disburseRefund(scope: { tenantId: string; workspaceId: string }, actorUserId: string, refundId: string, input: { method?: string; transactionRef?: string }, now: string): Promise<{ orderId: string; status: string }> {
-    const method = paymentMethod(input.method ?? "bank_transfer");
+    const method = refundDisbursementMethod(input.method ?? "bank_transfer");
     if (["bank_transfer", "alipay", "wechat", "crypto"].includes(method) && !input.transactionRef?.trim()) throw new BusinessValidationError("REFUND_DISBURSEMENT_REF_REQUIRED", "银行或电子支付实际出款必须填写转账流水号");
     const refund = await this.db.prepare("SELECT id, order_id, amount_minor, status, disbursed_at, disbursement_legacy_inferred FROM ad_order_refunds WHERE id = ? AND tenant_id = ? AND workspace_id = ? LIMIT 1").bind(refundId, scope.tenantId, scope.workspaceId).first<RefundRow>();
     if (!refund) throw new BusinessValidationError("REFUND_NOT_FOUND", "退款申请不存在或不属于当前工作空间");

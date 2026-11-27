@@ -112,7 +112,7 @@ async function main() {
   {
     const { database, db } = sqliteFixture();
     const repo = new ProductionPaymentRepository(db);
-    const paymentInput = { idempotencyKey: "payment-request-1", amountMinor: 4000, method: "bank_transfer", transactionRef: "TX-LIVE-1" };
+    const paymentInput = { idempotencyKey: "payment-request-1", amountMinor: 4000, method: "wechat", transactionRef: "TX-LIVE-1" };
     const paymentId = await repo.createPayment(scope, "finance-1", "order-payment", paymentInput, now);
     assert.equal(await repo.createPayment(scope, "finance-1", "order-payment", paymentInput, now), paymentId);
     await assert.rejects(() => repo.createPayment(scope, "finance-1", "order-payment", { ...paymentInput, amountMinor: 3000 }, now), { code: "IDEMPOTENCY_KEY_CONFLICT" });
