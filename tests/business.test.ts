@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BusinessValidationError, canTransitionOrder, parseCustomerInput, parseOrderContent, parsePackageInput } from "../apps/api/src/business";
 import { ASSET_OPTIONS, resolveAsset } from "../apps/api/src/money";
-import { formatMoney, parseAtomicAmount } from "../apps/web/src/lib/money";
+import { ASSETS, formatMoney, parseAtomicAmount } from "../apps/web/src/lib/money";
 
 describe("CRM and package validation", () => {
   it("normalizes customer fields and rejects invalid status", () => {
@@ -16,6 +16,7 @@ describe("CRM and package validation", () => {
 
   it("offers assets in the requested order and validates each asset's precision/network", () => {
     expect(ASSET_OPTIONS.map((asset) => asset.code)).toEqual(["CNY", "USD", "TON", "USDT"]);
+    expect(ASSETS.map((asset) => asset.label)).toEqual(["CNY", "USD", "TON", "USDT"]);
     expect(resolveAsset("cny")).toEqual({ currency: "CNY", scale: 2, network: null });
     expect(resolveAsset("USD")).toEqual({ currency: "USD", scale: 2, network: null });
     expect(resolveAsset("TON")).toEqual({ currency: "TON", scale: 9, network: "TON" });
