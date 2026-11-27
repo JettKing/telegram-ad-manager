@@ -14,9 +14,9 @@ export type Order = { id: string; order_no: string; customer_id: string; channel
 export type Schedule = { id: string; order_id: string; scheduled_at: string; status: string; created_at: string } & Record<string, unknown>;
 export type PublishTask = { id: string; order_id: string; status: string; attempt_count: number; scheduled_at?: string; last_error?: string } & Record<string, unknown>;
 export type Payment = { id: string; order_id: string; method: string; amount_minor: number; transaction_ref?: string; proof_asset_id?: string; status: string; reviewed_by?: string; reviewed_at?: string; review_note?: string; created_at: string };
-export type Refund = { id: string; order_id: string; amount_minor: number; reason: string; method?: string; transaction_ref?: string; status: string; requested_by?: string; reviewed_by?: string; reviewed_at?: string; review_note?: string; created_at: string };
-export type ReconciliationRow = { orderId: string; orderNo: string; dueMinor: number; approvedPaymentMinor: number; approvedRefundMinor: number; paymentStatus: string; status: string };
-export type TimelineEvent = { createdAt: string; type: string; objectId?: string; details?: string; status?: string; amountMinor?: number; reason?: string; entryType?: string; direction?: string; transactionRef?: string };
+export type Refund = { id: string; order_id: string; amount_minor: number; reason: string; method?: string; transaction_ref?: string; status: string; requested_by?: string; reviewed_by?: string; reviewed_at?: string; review_note?: string; disbursed_by?: string; disbursed_at?: string; disbursement_method?: string; disbursement_transaction_ref?: string; disbursement_legacy_inferred?: number; created_at: string };
+export type ReconciliationRow = { orderId: string; orderNo: string; dueMinor: number; approvedPaymentMinor: number; disbursedRefundMinor: number; legacyRefundMinor: number; paymentStatus: string; status: string };
+export type TimelineEvent = { createdAt: string; type: string; objectId?: string; details?: string; status?: string; amountMinor?: number; reason?: string; entryType?: string; direction?: string; transactionRef?: string; disbursedAt?: string; disbursedBy?: string; disbursementMethod?: string; disbursementTransactionRef?: string; disbursementLegacyInferred?: number };
 export type ExpirationFailure = { id: string; orderId: string; taskId: string; channelId: string; telegramChatId: string; status: string; attempts: number; nextAttemptAt?: string; lastError?: string; firstFailedAt?: string; lastAttemptAt?: string; resolvedAt?: string; resolutionNote?: string };
 export type MediaAsset = { id: string; media_type: string; file_id?: string; file_name?: string; mime_type?: string; file_size?: number; width?: number; height?: number; duration_seconds?: number; caption?: string; media_group_id?: string; review_status?: string; review_note?: string; reviewed_at?: string; created_at: string };
 export type OperationsSummary = { taskCounts: Record<string, number>; staleProcessing: number; openAlerts: number; latestCron?: { status: string; checkedAt: string; details: Record<string, unknown> } };
@@ -51,6 +51,7 @@ export async function downloadPaymentProof(proofId: string): Promise<void> { con
 export const reviewPayment = (paymentId: string, input: Record<string, unknown>) => request<{ orderId: string; orderPaymentStatus: string; orderStatus: string }>(`/api/v1/finance/payments/${paymentId}/review`, { method: "POST", body: JSON.stringify(input) });
 export const getPendingRefunds = () => request<{ refunds: Refund[] }>("/api/v1/finance/refunds/pending");
 export const reviewRefund = (refundId: string, input: Record<string, unknown>) => request<{ orderId: string; status: string }>(`/api/v1/finance/refunds/${refundId}/review`, { method: "POST", body: JSON.stringify(input) });
+export const disburseRefund = (refundId: string, input: { method?: string; transactionRef?: string } = {}) => request<{ orderId: string; status: string }>(`/api/v1/finance/refunds/${refundId}/disburse`, { method: "POST", body: JSON.stringify(input) });
 export const getReconciliation = () => request<{ orders: ReconciliationRow[] }>("/api/v1/finance/reconciliation");
 export const getOrderTimeline = (orderId: string) => request<{ events: TimelineEvent[] }>(`/api/v1/orders/${orderId}/timeline`);
 export const createRefund = (orderId: string, input: Record<string, unknown>) => request<{ refundId: string; status: string }>(`/api/v1/orders/${orderId}/refunds`, { method: "POST", body: JSON.stringify(input) });
@@ -63,7 +64,7 @@ export const getExpirationFailures = () => request<{ failures: ExpirationFailure
 export const retryExpirationFailure = (failureId: string) => request<{ retried: boolean; status: string }>(`/api/v1/expiration-failures/${failureId}/retry`, { method: "POST" });
 export const acknowledgeExpirationFailure = (failureId: string, note?: string) => request<{ acknowledged: boolean; status: string }>(`/api/v1/expiration-failures/${failureId}/acknowledge`, { method: "POST", body: JSON.stringify({ note }) });
 export const configureTelegramAlerts = (chatId: string) => request<{ configured: boolean; channelType: string }>("/api/v1/operations/notification-channels/telegram", { method: "POST", body: JSON.stringify({ chatId }) });
-export const retryPublishTask = (taskId: string) => request<{ retried: boolean; status: string }>(`/api/v1/publish-tasks/${taskId}/retry`, { method: "POST" });
+export const retryPublishTask = (taskId: string, confirmUncertain = false) => request<{ retried: boolean; status: string }>(`/api/v1/publish-tasks/${taskId}/retry`, { method: "POST", body: JSON.stringify({ confirmUncertain }) });
 export const cancelPublishTask = (taskId: string) => request<{ cancelled: boolean; status: string }>(`/api/v1/publish-tasks/${taskId}/cancel`, { method: "POST" });
 export const getMedia = () => request<{ assets: MediaAsset[] }>("/api/v1/media-assets");
 
