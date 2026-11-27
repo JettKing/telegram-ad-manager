@@ -248,14 +248,14 @@ app.get("/api/v1/workspace/members", requireAuth("workspace:manage"), async (con
 app.patch("/api/v1/workspace/members/:userId", requireAuth("workspace:manage"), async (context) => {
   const env = runtimeEnv(context.env); const auth = context.get("auth");
   if (!env.DB || !auth || !productionContract(env)) return context.json(failure("MEMBERS_NOT_CONFIGURED", "生产成员管理上下文尚未配置", requestId(context)), 503);
-  try { const body = await context.req.json() as Record<string, unknown>; const role = body.role === undefined ? undefined : String(body.role) as "owner" | "admin" | "manager" | "editor" | "finance" | "viewer"; const status = body.status === undefined ? undefined : String(body.status) as "active" | "suspended"; const now = new Date().toISOString(); const result = await new ProductionAdminRepository(env.DB).updateMember({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("userId"), role, status, now); await writeProductionAudit(env.DB, { tenantId: auth.tenantId, workspaceId: auth.workspaceId, actorUserId: auth.userId, action: "member.updated", entityType: "workspace_member", entityId: context.req.param("userId"), before: result.before, after: result.after, createdAt: now }); return context.json(success({ updated: result.updated }, requestId(context))); }
+  try { const body = await context.req.json() as Record<string, unknown>; const role = body.role === undefined ? undefined : String(body.role) as "owner" | "admin" | "manager" | "editor" | "finance" | "viewer"; const status = body.status === undefined ? undefined : String(body.status) as "active" | "suspended"; const now = new Date().toISOString(); const result = await new ProductionAdminRepository(env.DB).updateMember({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, auth.role, context.req.param("userId"), role, status, now); await writeProductionAudit(env.DB, { tenantId: auth.tenantId, workspaceId: auth.workspaceId, actorUserId: auth.userId, action: "member.updated", entityType: "workspace_member", entityId: context.req.param("userId"), before: result.before, after: result.after, createdAt: now }); return context.json(success({ updated: result.updated }, requestId(context))); }
   catch (error) { return businessError(context, error, requestId(context)); }
 });
 
 app.delete("/api/v1/workspace/members/:userId", requireAuth("workspace:manage"), async (context) => {
   const env = runtimeEnv(context.env); const auth = context.get("auth");
   if (!env.DB || !auth || !productionContract(env)) return context.json(failure("MEMBERS_NOT_CONFIGURED", "生产成员管理上下文尚未配置", requestId(context)), 503);
-  try { const now = new Date().toISOString(); const result = await new ProductionAdminRepository(env.DB).removeMember({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, context.req.param("userId"), now); await writeProductionAudit(env.DB, { tenantId: auth.tenantId, workspaceId: auth.workspaceId, actorUserId: auth.userId, action: "member.suspended", entityType: "workspace_member", entityId: context.req.param("userId"), before: result.before, after: { ...result.before, status: "suspended" }, createdAt: now }); return context.json(success({ removed: result.removed }, requestId(context))); }
+  try { const now = new Date().toISOString(); const result = await new ProductionAdminRepository(env.DB).removeMember({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, context.req.param("userId"), now); if (result.removed) await writeProductionAudit(env.DB, { tenantId: auth.tenantId, workspaceId: auth.workspaceId, actorUserId: auth.userId, action: "member.suspended", entityType: "workspace_member", entityId: context.req.param("userId"), before: result.before, after: { ...result.before, status: "suspended" }, createdAt: now }); return context.json(success({ removed: result.removed }, requestId(context))); }
   catch (error) { return businessError(context, error, requestId(context)); }
 });
 
@@ -301,7 +301,7 @@ app.get("/api/v1/finance/access", requireAuth("finance:read"), (context) => {
 
 function businessError(context: { json: (body: unknown, status?: number) => Response; req: { path: string; method: string } }, error: unknown, requestIdValue?: string): Response {
   if (error instanceof BusinessValidationError) {
-    const status = error.code.endsWith("_NOT_FOUND") || error.code === "ORDER_NOT_FOUND" ? 404 : error.code.includes("TRANSITION") || error.code.includes("LOCKED") || error.code.includes("ALREADY") ? 409 : 400;
+    const status = error.code.endsWith("_NOT_FOUND") || error.code === "ORDER_NOT_FOUND" ? 404 : error.code.includes("TRANSITION") || error.code.includes("LOCKED") || error.code.includes("ALREADY") || error.code.includes("IDEMPOTENCY") || error.code.includes("DUPLICATE") ? 409 : 400;
     return context.json(failure(error.code, error.message, requestIdValue), status);
   }
   console.error("business_api_error", {
@@ -431,6 +431,18 @@ app.post("/api/v1/finance/refunds/:refundId/review", requireAuth("finance:write"
   } catch (error) { return businessError(context, error, requestId(context)); }
 });
 
+app.post("/api/v1/finance/refunds/:refundId/disburse", requireAuth("finance:write"), async (context) => {
+  const env = runtimeEnv(context.env); const auth = context.get("auth");
+  if (!env.DB || !auth || !productionContract(env)) return context.json(failure("FINANCE_NOT_CONFIGURED", "生产退款出款登记尚未配置", requestId(context)), 503);
+  try {
+    const body = await context.req.json<Record<string, unknown>>();
+    const method = typeof body.method === "string" ? body.method : "bank_transfer";
+    const transactionRef = typeof body.transactionRef === "string" ? body.transactionRef.trim() : undefined;
+    const result = await new ProductionPaymentRepository(env.DB).disburseRefund({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("refundId"), { method, transactionRef }, new Date().toISOString());
+    return context.json(success(result, requestId(context)));
+  } catch (error) { return businessError(context, error, requestId(context)); }
+});
+
 app.get("/api/v1/customers", requireAuth("customer:read"), async (context) => {
   const env = runtimeEnv(context.env);
   const auth = context.get("auth");
@@ -538,7 +550,7 @@ app.get("/api/v1/operations/summary", requireAuth("publish:read"), async (contex
 app.post("/api/v1/publish-tasks/:taskId/retry", requireAuth("publish:write"), async (context) => {
   const env = runtimeEnv(context.env); const auth = context.get("auth");
   if (!env.DB || !auth || !productionContract(env)) return context.json(failure("OPERATIONS_NOT_CONFIGURED", "生产运维数据上下文尚未配置", requestId(context)), 503);
-  try { await new ProductionOperationsRepository(env.DB).retryTask({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, context.req.param("taskId"), auth.userId, new Date().toISOString()); return context.json(success({ retried: true, status: "queued" }, requestId(context))); }
+  try { const body = await context.req.json<{ confirmUncertain?: boolean }>().catch(() => ({} as { confirmUncertain?: boolean })); await new ProductionOperationsRepository(env.DB).retryTask({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, context.req.param("taskId"), auth.userId, new Date().toISOString(), body.confirmUncertain === true); return context.json(success({ retried: true, status: "queued" }, requestId(context))); }
   catch (error) { return businessError(context, error, requestId(context)); }
 });
 

@@ -11,6 +11,7 @@ export interface D1Like {
       run(): Promise<{ meta?: { changes?: number } }>;
     };
   };
+  batch?(statements: unknown[]): Promise<Array<{ meta?: { changes?: number } }>>;
 }
 
 export interface WebhookClaimResult {

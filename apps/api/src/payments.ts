@@ -7,6 +7,7 @@ export type RefundStatus = "pending_review" | "approved" | "rejected";
 export interface PaymentInput {
   method: string;
   amountMinor: number;
+  idempotencyKey?: string;
   transactionRef?: string;
   proofAssetId?: string;
 }
@@ -19,6 +20,7 @@ export interface PaymentReviewInput {
 export interface RefundInput {
   amountMinor: number;
   reason: string;
+  idempotencyKey?: string;
   method?: string;
   transactionRef?: string;
 }
@@ -50,6 +52,7 @@ export function parsePaymentInput(value: unknown): PaymentInput {
   return {
     method: stringField(input?.method, "payment_method", 50, true)!,
     amountMinor: amount(input?.amountMinor, "amountMinor"),
+    ...(input?.idempotencyKey !== undefined ? { idempotencyKey: stringField(input.idempotencyKey, "idempotency_key", 120, true)! } : {}),
     transactionRef: stringField(input?.transactionRef, "transaction_ref", 255),
     proofAssetId: stringField(input?.proofAssetId, "proof_asset_id", 100),
   };
@@ -67,6 +70,7 @@ export function parseRefundInput(value: unknown): RefundInput {
   return {
     amountMinor: amount(input?.amountMinor, "amountMinor"),
     reason: stringField(input?.reason, "refund_reason", 2000, true)!,
+    ...(input?.idempotencyKey !== undefined ? { idempotencyKey: stringField(input.idempotencyKey, "idempotency_key", 120, true)! } : {}),
     method: stringField(input?.method, "refund_method", 50),
     transactionRef: stringField(input?.transactionRef, "transaction_ref", 255),
   };

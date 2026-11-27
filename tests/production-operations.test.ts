@@ -26,6 +26,14 @@ describe("production operations", () => {
     await expect(new ProductionOperationsRepository(mockDb("processing").db).retryTask({ tenantId: "tenant-1", workspaceId: "workspace-1" }, "task-1", "user-1", "2026-11-27T00:00:00.000Z")).rejects.toMatchObject({ code: "PUBLISH_TASK_NOT_RETRYABLE" });
   });
 
+  it("requires explicit confirmation before retrying an uncertain Telegram send", async () => {
+    const scope = { tenantId: "tenant-1", workspaceId: "workspace-1" };
+    await expect(new ProductionOperationsRepository(mockDb("uncertain").db).retryTask(scope, "task-1", "user-1", "2026-11-27T00:00:00.000Z")).rejects.toMatchObject({ code: "PUBLISH_UNCERTAIN_CONFIRMATION_REQUIRED" });
+    const { db, queries } = mockDb("uncertain");
+    await new ProductionOperationsRepository(db).retryTask(scope, "task-1", "user-1", "2026-11-27T00:00:00.000Z", true);
+    expect(queries.join("\n")).toContain("AND status = ?");
+  });
+
   it("allows cancellation for queued or failed tasks but not succeeded tasks", async () => {
     const { db, queries } = mockDb("queued");
     await new ProductionOperationsRepository(db).cancelTask({ tenantId: "tenant-1", workspaceId: "workspace-1" }, "task-1", "user-1", "2026-11-27T00:00:00.000Z");

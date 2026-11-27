@@ -11,6 +11,11 @@ describe("payment proof validation", () => {
     expect(() => parsePaymentInput({ method: "cash", amountMinor: 0 })).toThrow(BusinessValidationError);
     expect(() => parsePaymentReviewInput({ status: "pending_review" })).toThrow("approved 或 rejected");
   });
+
+  it("preserves a supplied payment idempotency key and rejects an empty one", () => {
+    expect(parsePaymentInput({ method: "cash", amountMinor: 100, idempotencyKey: "pay-request-1" }).idempotencyKey).toBe("pay-request-1");
+    expect(() => parsePaymentInput({ method: "cash", amountMinor: 100, idempotencyKey: " " })).toThrow("idempotency_key 不能为空");
+  });
 });
 
 describe("refund ledger validation", () => {
@@ -22,5 +27,9 @@ describe("refund ledger validation", () => {
   it("only accepts explicit finance review decisions", () => {
     expect(parseRefundReviewInput({ status: "approved", note: "verified" })).toEqual({ status: "approved", note: "verified" });
     expect(() => parseRefundReviewInput({ status: "queued" })).toThrow(BusinessValidationError);
+  });
+
+  it("preserves a supplied refund idempotency key", () => {
+    expect(parseRefundInput({ amountMinor: 100, reason: "correction", idempotencyKey: "refund-request-1" }).idempotencyKey).toBe("refund-request-1");
   });
 });

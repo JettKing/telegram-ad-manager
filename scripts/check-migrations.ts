@@ -1,14 +1,13 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
-async function main() {
-  const migrationsDir = join(process.cwd(), "apps/api/migrations");
+async function validateDirectory(migrationsDir: string, expectedStart: number, label: string) {
   const files = (await readdir(migrationsDir)).filter((file) => file.endsWith(".sql")).sort();
   const numbers = files.map((file) => Number(file.slice(0, 4)));
-  const expected = numbers.map((_, index) => index + 1);
+  const expected = numbers.map((_, index) => index + expectedStart);
 
   if (files.length === 0 || numbers.some((number, index) => number !== expected[index])) {
-    throw new Error(`Migration files must start at 0001 and be contiguous: ${files.join(", ")}`);
+    throw new Error(`${label} migration files must be contiguous from ${String(expectedStart).padStart(4, "0")}: ${files.join(", ")}`);
   }
 
   for (const file of files) {
@@ -18,7 +17,14 @@ async function main() {
     }
   }
 
-  console.log(`Validated ${files.length} ordered migration files: ${files.join(", ")}`);
+  console.log(`Validated ${label}: ${files.length} ordered migration files (${files[0]} … ${files.at(-1)})`);
+}
+
+async function main() {
+  const root = process.cwd();
+  await validateDirectory(join(root, "apps/api/migrations"), 1, "development");
+  await validateDirectory(join(root, "apps/api/production-migrations/archive"), 9, "archived production history");
+  await validateDirectory(join(root, "apps/api/production-migrations/active"), 18, "active production");
 }
 
 main().catch((error: unknown) => {

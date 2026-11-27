@@ -40,6 +40,7 @@ async function main(): Promise<void> {
   if (config.account_id !== "bf9869d76a7fcbd9f75aefc5f98f3fbb") errors.push("production account_id does not match the audited Cloudflare account");
   const d1 = config.d1_databases?.find((item: any) => item.binding === "DB");
   if (!d1 || d1.database_name !== "tg-ad-manager" || d1.database_id !== "d9a4ad54-d504-40d6-abd5-a3e978a8ff5a") errors.push("DB binding does not match the audited tg-ad-manager D1");
+  if (d1?.migrations_dir !== "apps/api/production-migrations/active") errors.push("production D1 migrations_dir must use the active-only migration directory");
   const producer = config.queues?.producers?.find((item: any) => item.binding === "PUBLISH_QUEUE");
   if (!producer || producer.queue !== "tg-ad-manager-publish") errors.push("PUBLISH_QUEUE producer does not match the audited queue");
   if (!config.triggers?.crons?.includes("*/5 * * * *")) errors.push("5-minute Cron trigger is missing");
@@ -48,7 +49,7 @@ async function main(): Promise<void> {
     console.error(errors.join("\n"));
     process.exit(1);
   }
-  console.log("Validated production Cloudflare config for audited account, D1, queue, Worker name and Cron.");
+  console.log("Validated production Cloudflare config for audited account, D1 active migrations, queue, Worker name and Cron.");
 }
 
 void main();

@@ -40,11 +40,13 @@ export class ProductionOperationsRepository {
     return { taskCounts, staleProcessing: Number(stale?.count ?? 0), openAlerts: Number(alerts?.count ?? 0), ...(cron ? { latestCron: { status: cron.status, checkedAt: cron.checked_at, details } } : {}) };
   }
 
-  async retryTask(scope: { tenantId: string; workspaceId: string }, taskId: string, actorUserId: string, now: string): Promise<void> {
+  async retryTask(scope: { tenantId: string; workspaceId: string }, taskId: string, actorUserId: string, now: string, confirmUncertain = false): Promise<void> {
     const task = await this.db.prepare("SELECT id, tenant_id, attempts, status FROM publish_tasks WHERE id = ? AND tenant_id = ? AND workspace_id = ? LIMIT 1").bind(taskId, scope.tenantId, scope.workspaceId).first<{ id: string; tenant_id: string; attempts: number; status: TaskStatus }>();
     if (!task) throw new BusinessValidationError("PUBLISH_TASK_NOT_FOUND", "发布任务不存在或不属于当前工作空间");
     if (!["failed", "uncertain", "dead_letter", "cancelled"].includes(task.status)) throw new BusinessValidationError("PUBLISH_TASK_NOT_RETRYABLE", "当前任务状态不允许人工重试");
-    await this.db.prepare("UPDATE publish_tasks SET status = 'queued', attempts = 0, available_at = ?, locked_at = NULL, completed_at = NULL, last_error_code = NULL, last_error_message = NULL, updated_at = ? WHERE id = ? AND status = ?").bind(now, now, taskId, task.status).run();
+    if (task.status === "uncertain" && !confirmUncertain) throw new BusinessValidationError("PUBLISH_UNCERTAIN_CONFIRMATION_REQUIRED", "Telegram 发送结果不确定，重试可能重复发布；请先人工核对频道并明确确认");
+    const updated = await this.db.prepare("UPDATE publish_tasks SET status = 'queued', attempts = 0, available_at = ?, locked_at = NULL, completed_at = NULL, last_error_code = NULL, last_error_message = NULL, updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status = ?").bind(now, now, taskId, scope.tenantId, scope.workspaceId, task.status).run();
+    if ((updated.meta?.changes ?? 0) === 0) throw new BusinessValidationError("PUBLISH_TASK_STATE_CHANGED", "任务状态已变化，请刷新后重新核对");
     await this.db.prepare("INSERT INTO publish_task_logs (id, tenant_id, task_id, attempt, status, message, duration_ms, created_at) VALUES (?, ?, ?, ?, 'manual_retry', ?, NULL, ?)").bind(crypto.randomUUID(), task.tenant_id, taskId, task.attempts, JSON.stringify({ actorUserId }), now).run();
   }
 
@@ -52,7 +54,8 @@ export class ProductionOperationsRepository {
     const task = await this.db.prepare("SELECT id, tenant_id, attempts, status FROM publish_tasks WHERE id = ? AND tenant_id = ? AND workspace_id = ? LIMIT 1").bind(taskId, scope.tenantId, scope.workspaceId).first<{ id: string; tenant_id: string; attempts: number; status: TaskStatus }>();
     if (!task) throw new BusinessValidationError("PUBLISH_TASK_NOT_FOUND", "发布任务不存在或不属于当前工作空间");
     if (!["queued", "failed", "uncertain", "dead_letter"].includes(task.status)) throw new BusinessValidationError("PUBLISH_TASK_NOT_CANCELLABLE", "当前任务状态不允许取消");
-    await this.db.prepare("UPDATE publish_tasks SET status = 'cancelled', locked_at = NULL, updated_at = ? WHERE id = ? AND status = ?").bind(now, taskId, task.status).run();
+    const updated = await this.db.prepare("UPDATE publish_tasks SET status = 'cancelled', locked_at = NULL, updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status = ?").bind(now, taskId, scope.tenantId, scope.workspaceId, task.status).run();
+    if ((updated.meta?.changes ?? 0) === 0) throw new BusinessValidationError("PUBLISH_TASK_STATE_CHANGED", "任务状态已变化，请刷新后重新核对");
     await this.db.prepare("INSERT INTO publish_task_logs (id, tenant_id, task_id, attempt, status, message, duration_ms, created_at) VALUES (?, ?, ?, ?, 'cancelled', ?, NULL, ?)").bind(crypto.randomUUID(), task.tenant_id, taskId, task.attempts, JSON.stringify({ actorUserId }), now).run();
   }
 
