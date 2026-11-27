@@ -36,6 +36,6 @@ npx wrangler d1 migrations list tg-ad-manager --remote --config wrangler.product
 npx wrangler d1 migrations apply tg-ad-manager --remote --config wrangler.production.jsonc
 ```
 
-workflow `45921992737` 应用 0018；后续 workflow `45931956483` 已成功应用 0019 并部署 Worker。前端最新提交 `fc19b5a` 的 Pages workflow `45932615514` 和 CI `45932615488` 均成功。此前 `/health`、`/health/ready`、`/api/v1/health` 均 HTTP 200，部署后 Cron 快照 `ok`（`2026-11-27T01:25:54.709Z`）。Queue consumer 为 0，当前发布与通知依赖 D1 polling + Cron；历史 Webhook accepted/200 不能证明本次发布后的送达。测试租户/频道真实流程、多币种收款/退款对账及 iPhone Telegram Mini App 验收仍待完成；未进行真实收款/退款，不能声称财务端到端验收通过。
+workflow `45921992737` 应用 0018；后续 workflow `45931956483` 已成功应用 0019 并部署 Worker。前端最新提交 `fc19b5a` 的 Pages workflow `45932615514` 和 CI `45932615488` 均成功。此前 `/health`、`/health/ready`、`/api/v1/health` 均 HTTP 200，部署后 Cron 快照 `ok`（`2026-11-27T01:25:54.709Z`）。Queue consumer 为 0，当前发布与通知依赖 D1 polling + Cron；历史 Webhook accepted/200 不能证明本次发布后的送达。测试租户/频道真实流程和多币种收款/退款对账仍待完成；未进行真实收款/退款，不能声称财务端到端验收通过。
 
 Worker 部署、Bot 身份和四个运行 Secret 已通过 GitHub Actions 完成。Secrets 只通过 GitHub/Cloudflare Secret 输入，不提交 `.env` 或 Git。
