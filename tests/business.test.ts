@@ -16,6 +16,7 @@ describe("CRM and package validation", () => {
 
   it("offers assets in the requested order and validates each asset's precision/network", () => {
     expect(ASSET_OPTIONS.map((asset) => asset.code)).toEqual(["CNY", "USD", "TON", "USDT"]);
+    expect(ASSET_OPTIONS.map((asset) => asset.label)).toEqual(["CNY", "USD", "TON", "USDT"]);
     expect(ASSETS.map((asset) => asset.label)).toEqual(["CNY", "USD", "TON", "USDT"]);
     expect(resolveAsset("cny")).toEqual({ currency: "CNY", scale: 2, network: null });
     expect(resolveAsset("USD")).toEqual({ currency: "USD", scale: 2, network: null });

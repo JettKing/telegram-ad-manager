@@ -4,9 +4,9 @@
 
 ## 2026-11-27 最新生产状态
 
-生产发布 workflow `45921992737` 成功：在迁移前备份并校验 48 张表后应用 `0018_refund_disbursement.sql`，部署 Worker，并配置/验证 Telegram Bot identity。部署后 D1 ledger 记录 0018；退款出款字段与索引存在，退款记录为 0。Worker 部署 `80f44704-411b-4dca-9919-e7aeb4604039` / version `31b69fa3-c871-4614-ae2a-0b7d72ad2a27` 为 100%。Finance UI commit `3a7f050` 的 CI 与 Pages workflow 成功，线上页面资源已更新。
+生产发布 workflow `45921992737` 成功应用 `0018_refund_disbursement.sql`；后续 workflow `45931956483` 在迁移前备份并校验 D1 后应用 `0019_multi_currency_finance.sql`，部署 Worker，并配置/验证 Telegram Bot identity。生产财务现支持 CNY、USD、TON、USDT，USDT 网络为 TON、TRON；退款批准与实际出款仍分开。前端最新提交 `fc19b5a` 的 Pages run `45932615514` 与 CI run `45932615488` 均成功。真实业务收款/退款对账仍待验收。
 
-只读 HTTP smoke checks 中 `/health`、`/health/ready`、`/api/v1/health` 均返回 200。最终 Worker 部署后的 `production_cron` 快照为 `ok`（`2026-11-27T01:25:54.709Z`），结果为零任务处理、零失败。Queue 当前 0 consumer，代码无 Queue producer `.send()`/handler；发布和通知走 D1 polling + Cron。历史 Webhook logs 的 accepted/200 不构成部署后送达证据。真实测试租户/频道 E2E、CNY 收款/退款账务对账以及 iPhone Telegram Mini App 验收尚未完成；代码/CI、部署成功与生产业务验收必须分别报告。
+此前只读 HTTP smoke checks 中 `/health`、`/health/ready`、`/api/v1/health` 均返回 200。已核验部署后的 `production_cron` 快照为 `ok`（`2026-11-27T01:25:54.709Z`），结果为零任务处理、零失败。Queue 当前 0 consumer，代码无 Queue producer `.send()`/handler；发布和通知走 D1 polling + Cron。历史 Webhook logs 的 accepted/200 不构成最新部署后的送达证据。真实测试租户/频道 E2E、多币种收款/退款账务对账以及 iPhone Telegram Mini App 验收尚未完成；代码/CI、部署成功与生产业务验收必须分别报告。
 
 ## 只读审计结果
 

@@ -1,8 +1,8 @@
 import { BusinessValidationError } from "./errors.js";
 
 export const ASSET_OPTIONS = [
-  { code: "CNY", label: "CNY 人民币", scale: 2, networks: [] as string[] },
-  { code: "USD", label: "USD 美元", scale: 2, networks: [] as string[] },
+  { code: "CNY", label: "CNY", scale: 2, networks: [] as string[] },
+  { code: "USD", label: "USD", scale: 2, networks: [] as string[] },
   { code: "TON", label: "TON", scale: 9, networks: ["TON"] },
   { code: "USDT", label: "USDT", scale: 6, networks: ["TON", "TRON"] },
 ] as const;
