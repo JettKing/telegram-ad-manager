@@ -4,9 +4,9 @@ TG Ad Manager 是 Telegram 广告管理 SaaS 的工程基线，按多租户、�
 
 ## 当前阶段
 
-已完成 Cloudflare 账户、D1、Queue 和 Worker 资源的只读审计，并确认目标 D1 已存在独立 production schema。发布 Cron 已支持通过 `D1_SCHEMA_CONTRACT=production-0009` 选择生产发布适配器，适配 `publish_tasks`、`publish_task_logs`、`ad_schedules`、`creative_media` 和 `telegram_channel_permissions`。生产增量迁移维护在 `apps/api/production-migrations/`，不等同于开发迁移目录。
+Cloudflare 生产 D1 迁移 0018 已受控应用并核验，后端 Worker 与 Finance UI 已部署；CI、测试、类型检查和构建成功。历史迁移仍在 `apps/api/production-migrations/archive/`，Wrangler 仅扫描 `active/`，避免错误重放。
 
-当前没有把未配置的 Telegram、Cloudflare Worker、Queues、Cron、R2 或订单/收入数据伪装成已完成。认证、媒体、CRM、付款等 API 仍需继续适配生产 schema，真实外部联调按 `TODO.md` 分阶段推进。
+必须区分代码/CI 通过、部署完成与真实生产业务验收。D1 迁移、Worker、Pages 均已部署，健康探测返回 200；但测试租户/频道 Telegram 全链路、真实 CNY 收款/退款对账和 iPhone Telegram Mini App 逐页验收仍未完成。订阅生产 schema 尚未接入，相关接口保持阻断。详见 `PROJECT_STATUS.md` 和 `TODO.md`。
 
 ## 开发
 
