@@ -103,6 +103,14 @@ describe("production finance write safety", () => {
     expect(batches).toHaveLength(0);
   });
 
+  it("rejects an unknown refund disbursement method instead of recording it as other", async () => {
+    const { db, queries, batches } = mockDb();
+    await expect(new ProductionPaymentRepository(db).disburseRefund(scope, "finance-1", "refund-1", { method: "paypal-ish", transactionRef: "RF-1", actualAmountMinor: 5000 }, "2026-11-27T00:00:00.000Z"))
+      .rejects.toMatchObject({ code: "INVALID_REFUND_DISBURSEMENT_METHOD" });
+    expect(queries).toHaveLength(0);
+    expect(batches).toHaveLength(0);
+  });
+
   it("records an actual refund disbursement atomically with ledger and order-state updates", async () => {
     const { db, batches, bindings } = mockDb({ refund: { id: "refund-1", order_id: "order-1", amount_minor: 5000, status: "approved", disbursed_at: null } });
     const result = await new ProductionPaymentRepository(db).disburseRefund(scope, "finance-1", "refund-1", { method: "bank_transfer", transactionRef: "RF-1", actualAmountMinor: 5000 }, "2026-11-27T00:00:00.000Z");

@@ -17,6 +17,8 @@ export interface PublishContent {
   entities: unknown[];
 }
 
+export interface PublishedMessageProgress { messageId: number; contentKey: string }
+
 interface ScheduleRow { id: string; order_id: string; channel_id: string; schedule_type: ScheduleType; planned_at: string; paused_at?: string; cancelled_at?: string; created_at: string; updated_at: string }
 interface TaskRow { id: string; order_id: string; schedule_id?: string; idempotency_key: string; status: PublishTaskStatus; attempts: number; max_attempts: number; next_attempt_at?: string; last_error_code?: string; last_error_message?: string; created_at: string; updated_at: string }
 interface PayloadRow { task_id: string; order_id: string; channel_id: string; telegram_chat_id: string; content_json: string; planned_at: string; status: string }
@@ -143,7 +145,7 @@ export class D1PublishRepository {
   async markFailed(task: TaskRow, error: PublishError, now: string): Promise<{ status: PublishTaskStatus; retryAt?: string }> {
     const shouldRetry = error.retryable && task.attempts < task.max_attempts;
     const retryAt = shouldRetry ? new Date(Date.parse(now) + retryDelaySeconds(task.attempts, error.retryAfterSeconds) * 1000).toISOString() : undefined;
-    const status: PublishTaskStatus = shouldRetry ? "queued" : error.code === "PUBLISH_NETWORK_ERROR" ? "uncertain" : "failed";
+    const status: PublishTaskStatus = shouldRetry ? "queued" : error.code === "PUBLISH_NETWORK_ERROR" || error.code === "PUBLISH_PARTIAL_SEND" ? "uncertain" : "failed";
     await this.db.prepare("UPDATE ad_publish_tasks SET status = ?, next_attempt_at = ?, last_error_code = ?, last_error_message = ?, updated_at = ? WHERE id = ? AND status = 'processing'").bind(status, retryAt ?? null, error.code, error.message.slice(0, 500), now, task.id).run();
     await this.db.prepare("INSERT INTO ad_publish_logs (id, task_id, telegram_chat_id, result, error_code, error_message, retry_after_seconds, executed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(crypto.randomUUID(), task.id, "unknown", status === "uncertain" ? "uncertain" : "failed", error.code, error.message.slice(0, 500), error.retryAfterSeconds ?? null, now).run();
     if (status === "failed" || status === "uncertain") await this.db.prepare("UPDATE ad_orders SET status = 'failed', updated_at = ? WHERE id = ? AND status IN ('scheduled', 'publishing')").bind(now, task.order_id).run();
@@ -167,10 +169,16 @@ export class D1PublishRepository {
 export class TelegramPublisher {
   constructor(public readonly client: TelegramBotApiClient) {}
 
-  async publishMany(chatId: string, content: PublishContent, assets: AssetRow[]): Promise<number[]> {
+  async publishMany(chatId: string, content: PublishContent, assets: AssetRow[], onMessage?: (messageId: number, contentKey: string) => Promise<void>, alreadyPublished: PublishedMessageProgress[] = []): Promise<number[]> {
     const caption = content.text || undefined;
-    const messageIds: number[] = [];
+    const messageIds = alreadyPublished.map((item) => item.messageId);
+    const sentKeys = new Set(alreadyPublished.map((item) => item.contentKey));
+    const assetKeys = new Set(assets.filter((asset) => asset.file_id).map((asset) => asset.id));
+    if ([...sentKeys].some((key) => key !== "text" && !assetKeys.has(key)) || (sentKeys.has("text") && assetKeys.size > 0)) {
+      throw new PublishError("PUBLISH_PROGRESS_SOURCE_CHANGED", "待续发素材与已发送进度不匹配，任务需人工核对", false);
+    }
     for (const asset of assets) {
+      if (sentKeys.has(asset.id)) continue;
       if (!asset.file_id) continue;
       const result = asset.media_type === "photo"
         ? await this.client.sendPhoto(chatId, asset.file_id, caption)
@@ -179,11 +187,16 @@ export class TelegramPublisher {
           : asset.media_type === "document" || asset.media_type === "animation"
             ? await this.client.sendDocument(chatId, asset.file_id, caption)
             : undefined;
-      if (result) messageIds.push(result.message_id);
+      if (result) {
+        messageIds.push(result.message_id);
+        await onMessage?.(result.message_id, asset.id);
+      }
     }
     if (messageIds.length > 0) return messageIds;
     if (!content.text.trim()) throw new PublishError("EMPTY_PUBLISH_CONTENT", "订单没有可发布的文本或素材", false);
-    return [(await this.client.sendMessage(chatId, content.text)).message_id];
+    const messageId = (await this.client.sendMessage(chatId, content.text)).message_id;
+    await onMessage?.(messageId, "text");
+    return [messageId];
   }
 
   async publish(chatId: string, content: PublishContent, assets: AssetRow[]): Promise<number> {
@@ -201,13 +214,17 @@ export async function processDuePublishTasks(env: PublishRuntimeEnv, now = new D
     const task = await repository.claimNextTask(now);
     if (!task) break;
     result.processed += 1;
+    let sentMessageCount = 0;
     try {
       const data = await repository.payload(task.id);
-      const messageId = await publisher.publish(data.payload.telegram_chat_id, data.content, data.assets);
+      const messageIds = await publisher.publishMany(data.payload.telegram_chat_id, data.content, data.assets, async () => { sentMessageCount += 1; });
+      const messageId = messageIds[messageIds.length - 1];
       await repository.markSucceeded(task, messageId, data.payload.telegram_chat_id, now);
       result.succeeded += 1;
     } catch (error) {
-      const failure = classifyPublishError(error);
+      const failure = sentMessageCount > 0
+        ? new PublishError("PUBLISH_PARTIAL_SEND", "部分 Telegram 消息已发送但发布未完成；系统停止自动重试，请人工核对频道", false)
+        : classifyPublishError(error);
       const outcome = await repository.markFailed(task, failure, now);
       if (outcome.status === "queued") result.retried += 1; else result.failed += 1;
     }

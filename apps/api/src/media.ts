@@ -165,13 +165,15 @@ export class D1MediaRepository {
         `INSERT INTO media_groups (id, tenant_id, workspace_id, bot_identity_id, telegram_media_group_id, state, version, last_received_at, created_at)
          VALUES (?, ?, ?, ?, ?, 'collecting', 1, ?, ?)`,
       ).bind(group.id, scope.tenantId, scope.workspaceId, botIdentityId, groupId, receivedAt, now).run();
+      await this.db.prepare("INSERT OR IGNORE INTO media_group_items (media_group_id, media_asset_id, message_id, received_at) VALUES (?, ?, ?, ?)").bind(group.id, assetId, messageId, receivedAt).run();
     } else {
+      const inserted = await this.db.prepare("INSERT OR IGNORE INTO media_group_items (media_group_id, media_asset_id, message_id, received_at) VALUES (?, ?, ?, ?)").bind(group.id, assetId, messageId, receivedAt).run();
+      if ((inserted.meta?.changes ?? 0) === 0) return { groupId: group.id, state: group.state };
       const transition = transitionMediaGroup(group.state, "item_received");
       const version = group.version + (transition.incrementVersion ? 1 : 0);
       await this.db.prepare("UPDATE media_groups SET state = ?, version = ?, last_received_at = ? WHERE id = ?").bind(transition.state, version, receivedAt, group.id).run();
       group = { ...group, state: transition.state, version };
     }
-    await this.db.prepare("INSERT OR IGNORE INTO media_group_items (media_group_id, media_asset_id, message_id, received_at) VALUES (?, ?, ?, ?)").bind(group.id, assetId, messageId, receivedAt).run();
     return { groupId: group.id, state: group.state };
   }
 

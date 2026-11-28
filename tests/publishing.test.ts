@@ -35,4 +35,20 @@ describe("Telegram publisher", () => {
     const textOnlyClient = { sendMessage: vi.fn().mockResolvedValue({ message_id: 12 }) } as unknown as TelegramBotApiClient;
     await expect(new TelegramPublisher(textOnlyClient).publish("-100", { text: "纯文本", assetIds: [], entities: [] }, [])).resolves.toBe(12);
   });
+
+  it("resumes by stable asset ID and rejects changed progress sources", async () => {
+    const client = { sendPhoto: vi.fn().mockResolvedValue({ message_id: 22 }) } as unknown as TelegramBotApiClient;
+    const publisher = new TelegramPublisher(client);
+    const content = { text: "文案", assetIds: [], entities: [] };
+    const assets = [
+      { id: "asset-a", media_type: "photo" as const, file_id: "file-a", sort_order: 0 },
+      { id: "asset-b", media_type: "photo" as const, file_id: "file-b", sort_order: 1 },
+    ];
+    const onMessage = vi.fn().mockResolvedValue(undefined);
+    await expect(publisher.publishMany("-100", content, assets, onMessage, [{ messageId: 21, contentKey: "asset-a" }])).resolves.toEqual([21, 22]);
+    expect(client.sendPhoto).toHaveBeenCalledTimes(1);
+    expect(client.sendPhoto).toHaveBeenCalledWith("-100", "file-b", "文案");
+    expect(onMessage).toHaveBeenCalledWith(22, "asset-b");
+    await expect(publisher.publishMany("-100", content, assets, undefined, [{ messageId: 21, contentKey: "removed-asset" }])).rejects.toThrow("素材与已发送进度不匹配");
+  });
 });

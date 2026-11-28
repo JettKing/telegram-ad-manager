@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { hasPermission, issuePlatformSession, readPlatformSession, revokePlatformSession, type ProvisionedIdentity } from "../apps/api/src/identity";
+import { issueProductionPlatformSession, readProductionPlatformSession } from "../apps/api/src/production-identity";
 import type { D1Like } from "@tg-ad-manager/telegram";
 
 type SessionRecord = { id: string; userId: string; tenantId: string; expiresAt: string; revokedAt?: string };
@@ -81,5 +82,21 @@ describe("platform sessions", () => {
 
     await revokePlatformSession(db, issued.sessionId, new Date("2026-01-01T00:20:00.000Z"));
     expect(await readPlatformSession(db, issued.token, "test-session-secret", new Date("2026-01-01T00:21:00.000Z"))).toBeNull();
+  });
+
+  it("requires active tenant status when reading a production session", async () => {
+    const queries: string[] = [];
+    const db = {
+      prepare(query: string) {
+        queries.push(query);
+        return { bind() { return {
+          async first<T>() { return query.includes("SELECT us.id AS sessionId") ? { sessionId: "session-1", expiresAt: "2026-01-01T01:00:00.000Z", userId: "user-1", telegramUserId: "123", tenantId: "tenant-1", workspaceId: "workspace-1", role: "owner" } as T : null; },
+          async run() { return { meta: { changes: 1 } }; },
+        }; } };
+      },
+    } as unknown as D1Like;
+    const issued = await issueProductionPlatformSession(db, identity, "production-secret", 3600, new Date("2026-01-01T00:00:00.000Z"));
+    expect(await readProductionPlatformSession(db, issued.token, "production-secret", new Date("2026-01-01T00:10:00.000Z"))).not.toBeNull();
+    expect(queries.some((query) => query.includes("JOIN tenants t ON t.id = tm.tenant_id AND t.status = 'active'"))).toBe(true);
   });
 });

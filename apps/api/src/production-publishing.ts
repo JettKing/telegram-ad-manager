@@ -1,7 +1,7 @@
 import type { D1Like } from "@tg-ad-manager/telegram";
 import { BusinessValidationError } from "./business.js";
 import { TelegramApiError, TelegramBotApiClient } from "./channels.js";
-import { classifyPublishError, PublishError, retryDelaySeconds, TelegramPublisher, type AssetRow, type PublishContent, type ScheduleType } from "./publishing.js";
+import { classifyPublishError, PublishError, retryDelaySeconds, TelegramPublisher, type AssetRow, type PublishContent, type PublishedMessageProgress, type ScheduleType } from "./publishing.js";
 import { raiseOperationalAlert } from "./production-operations.js";
 import { enqueueCustomerNotification } from "./production-customer-notifications.js";
 
@@ -26,6 +26,7 @@ interface ProductionTaskRow {
   attempts: number;
   max_attempts: number;
   available_at: string;
+  telegram_message_ids_json?: string;
   idempotency_key: string;
   created_at: string;
   updated_at: string;
@@ -59,6 +60,38 @@ export interface ProductionPublishRuntimeEnv {
   DB?: D1Like;
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_API_BASE_URL?: string;
+}
+
+interface StoredPublishProgress {
+  messages: PublishedMessageProgress[];
+  legacyMessageIds: number[];
+}
+
+function parseStoredPublishProgress(raw?: string): StoredPublishProgress {
+  if (!raw) return { messages: [], legacyMessageIds: [] };
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { throw new PublishError("PUBLISH_PROGRESS_PERSIST_FAILED", "已发送消息进度记录损坏，任务需人工核对", false); }
+  if (Array.isArray(value) && value.every((item) => Number.isSafeInteger(item) && Number(item) > 0)) return { messages: [], legacyMessageIds: value as number[] };
+  const progress = object(value);
+  if (progress?.version !== 1 || !Array.isArray(progress.messages)) throw new PublishError("PUBLISH_PROGRESS_PERSIST_FAILED", "已发送消息进度记录格式无效，任务需人工核对", false);
+  const messages: PublishedMessageProgress[] = [];
+  for (const item of progress.messages) {
+    const message = object(item);
+    if (!message || !Number.isSafeInteger(message.messageId) || Number(message.messageId) <= 0 || typeof message.contentKey !== "string" || !message.contentKey) {
+      throw new PublishError("PUBLISH_PROGRESS_PERSIST_FAILED", "已发送消息进度记录格式无效，任务需人工核对", false);
+    }
+    messages.push({ messageId: Number(message.messageId), contentKey: message.contentKey });
+  }
+  return { messages, legacyMessageIds: [] };
+}
+
+function serializePublishProgress(messages: PublishedMessageProgress[]): string {
+  return JSON.stringify({ version: 1, messages });
+}
+
+function progressMessageIds(raw?: string): number[] {
+  const progress = parseStoredPublishProgress(raw);
+  return [...progress.legacyMessageIds, ...progress.messages.map((message) => message.messageId)];
 }
 
 function object(value: unknown): Record<string, unknown> | null {
@@ -117,8 +150,8 @@ export class ProductionPublishRepository {
     const order = await this.getOrder(scope, orderId);
     if (order.status !== "approved") throw new BusinessValidationError("ORDER_NOT_APPROVED", "只有 approved 订单可以进入生产排期");
     const channel = await this.db.prepare(`SELECT c.id FROM telegram_channels c JOIN telegram_channel_permissions p ON p.channel_id = c.id AND p.tenant_id = c.tenant_id
-      WHERE c.id = ? AND c.tenant_id = ? AND c.workspace_id = ? AND c.status = 'active' AND p.can_post_messages = 1 ORDER BY p.checked_at DESC LIMIT 1`).bind(order.channel_id, scope.tenantId, scope.workspaceId).first<{ id: string }>();
-    if (!channel) throw new BusinessValidationError("CHANNEL_NOT_READY", "生产频道不存在或没有 can_post_messages 权限");
+      WHERE c.id = ? AND c.tenant_id = ? AND c.workspace_id = ? AND c.status = 'active' AND p.can_post_messages = 1 AND p.can_delete_messages = 1 ORDER BY p.checked_at DESC LIMIT 1`).bind(order.channel_id, scope.tenantId, scope.workspaceId).first<{ id: string }>();
+    if (!channel) throw new BusinessValidationError("CHANNEL_NOT_READY", "生产频道不存在或未同时授予 can_post_messages 与 can_delete_messages 权限");
     const scheduleId = crypto.randomUUID();
     const taskId = crypto.randomUUID();
     const idempotencyKey = `schedule:${orderId}:${input.startAt}`;
@@ -131,17 +164,17 @@ export class ProductionPublishRepository {
   }
 
   async claimNextTask(now: string): Promise<ProductionTaskRow | null> {
-    const candidates = await all<ProductionTaskRow>(this.db, `SELECT id, tenant_id, workspace_id, order_id, schedule_id, channel_id, status, attempts, max_attempts, available_at, idempotency_key, created_at, updated_at
+    const candidates = await all<ProductionTaskRow>(this.db, `SELECT id, tenant_id, workspace_id, order_id, schedule_id, channel_id, status, attempts, max_attempts, available_at, telegram_message_ids_json, idempotency_key, created_at, updated_at
       FROM publish_tasks WHERE status = 'queued' AND available_at <= ? ORDER BY available_at ASC, created_at ASC LIMIT 20`, now);
     for (const candidate of candidates) {
-      const result = await this.db.prepare("UPDATE publish_tasks SET status = 'processing', locked_at = ?, attempts = attempts + 1, updated_at = ? WHERE id = ? AND status = 'queued'").bind(now, now, candidate.id).run();
+      const result = await this.db.prepare("UPDATE publish_tasks SET status = 'processing', locked_at = ?, attempts = attempts + 1, updated_at = ? WHERE id = ? AND status = 'queued' AND attempts = ?").bind(now, now, candidate.id, candidate.attempts).run();
       if ((result.meta?.changes ?? 0) > 0) return { ...candidate, status: "processing", attempts: candidate.attempts + 1, updated_at: now };
     }
     return null;
   }
 
   async payload(taskId: string): Promise<{ task: ProductionTaskRow; payload: ProductionPayload; content: PublishContent; assets: AssetRow[] }> {
-    const task = await this.db.prepare(`SELECT id, tenant_id, workspace_id, order_id, schedule_id, channel_id, status, attempts, max_attempts, available_at, idempotency_key, created_at, updated_at
+    const task = await this.db.prepare(`SELECT id, tenant_id, workspace_id, order_id, schedule_id, channel_id, status, attempts, max_attempts, available_at, telegram_message_ids_json, idempotency_key, created_at, updated_at
       FROM publish_tasks WHERE id = ? LIMIT 1`).bind(taskId).first<ProductionTaskRow>();
     if (!task) throw new PublishError("TASK_NOT_FOUND", "生产发布任务不存在", false);
     const payload = await this.db.prepare(`SELECT t.id AS task_id, t.tenant_id, o.id AS order_id, t.schedule_id, c.telegram_chat_id, o.content_text, o.parse_mode, o.media_type, o.media_file_id, o.media_items_json
@@ -159,19 +192,60 @@ export class ProductionPublishRepository {
     return { task, payload, content, assets };
   }
 
-  async markSucceeded(task: ProductionTaskRow, messageIds: number[], now: string): Promise<void> {
-    await this.db.prepare("UPDATE publish_tasks SET status = 'succeeded', completed_at = ?, locked_at = NULL, telegram_message_ids_json = ?, last_error_code = NULL, last_error_message = NULL, updated_at = ? WHERE id = ? AND status = 'processing'").bind(now, JSON.stringify(messageIds), now, task.id).run();
-    await this.db.prepare("INSERT INTO publish_task_logs (id, tenant_id, task_id, attempt, status, message, duration_ms, created_at) VALUES (?, ?, ?, ?, 'succeeded', ?, NULL, ?)").bind(crypto.randomUUID(), task.tenant_id, task.id, task.attempts, JSON.stringify({ messageIds }), now).run();
-    await this.db.prepare("UPDATE ad_orders SET status = CASE WHEN status IN ('scheduled', 'publishing') THEN 'published' ELSE status END, published_at = ?, updated_at = ? WHERE id = ?").bind(now, now, task.order_id).run();
+  async recordPublishedMessage(task: ProductionTaskRow, messageId: number, contentKey: string, now: string): Promise<void> {
+    const progress = parseStoredPublishProgress(task.telegram_message_ids_json);
+    if (progress.legacyMessageIds.length > 0) throw new PublishError("PUBLISH_PROGRESS_PERSIST_FAILED", "旧版发布进度无法映射到素材，任务需人工核对", false);
+    const existing = progress.messages.find((item) => item.contentKey === contentKey);
+    if (existing && existing.messageId !== messageId) throw new PublishError("PUBLISH_PROGRESS_PERSIST_FAILED", "同一素材对应多个已发送消息，任务需人工核对", false);
+    if (!existing) progress.messages.push({ messageId, contentKey });
+    const serialized = serializePublishProgress(progress.messages);
+    const result = await this.db.prepare("UPDATE publish_tasks SET telegram_message_ids_json = ?, updated_at = ? WHERE id = ? AND status = 'processing' AND attempts = ?").bind(serialized, now, task.id, task.attempts).run();
+    if ((result.meta?.changes ?? 0) === 0) throw new PublishError("PUBLISH_PROGRESS_PERSIST_FAILED", "已发送消息但任务租约已失效；请人工核对频道后再处理", false);
+    task.telegram_message_ids_json = serialized;
   }
 
-  async markFailed(task: ProductionTaskRow, error: PublishError, now: string): Promise<"queued" | "dead_letter" | "uncertain"> {
-    const retry = error.retryable && task.attempts < task.max_attempts;
+  async markStaleProcessingUncertain(now: string, leaseMinutes = 30): Promise<number> {
+    const cutoff = new Date(Date.parse(now) - leaseMinutes * 60_000).toISOString();
+    const result = await this.db.prepare(`UPDATE publish_tasks SET status = 'uncertain', locked_at = NULL, last_error_code = 'STALE_PROCESSING_RECOVERY',
+      last_error_message = 'Worker 租约过期，Telegram 发送结果需人工核对；系统未自动重发以避免重复投放', updated_at = ?
+      WHERE status = 'processing' AND locked_at IS NOT NULL AND locked_at <= ?`).bind(now, cutoff).run();
+    const recovered = Number(result.meta?.changes ?? 0);
+    if (recovered > 0) await this.db.prepare(`UPDATE ad_orders SET status = 'failed', updated_at = ? WHERE status IN ('scheduled', 'publishing')
+      AND id IN (SELECT order_id FROM publish_tasks WHERE status = 'uncertain' AND last_error_code = 'STALE_PROCESSING_RECOVERY' AND updated_at = ?)`).bind(now, now).run();
+    return recovered;
+  }
+
+  async markSucceeded(task: ProductionTaskRow, messageIds: number[], now: string): Promise<void> {
+    const progress = parseStoredPublishProgress(task.telegram_message_ids_json);
+    if (progress.legacyMessageIds.length > 0 || JSON.stringify(progress.messages.map((item) => item.messageId)) !== JSON.stringify(messageIds)) {
+      throw new PublishError("PUBLISH_PROGRESS_PERSIST_FAILED", "最终消息清单与已持久化进度不一致，任务需人工核对", false);
+    }
+    if (!this.db.batch) throw new PublishError("PUBLISH_FINALIZE_UNAVAILABLE", "D1 不支持原子发布状态提交，任务需人工核对", false);
+    const statements = [
+      this.db.prepare("UPDATE publish_tasks SET status = 'succeeded', completed_at = ?, locked_at = NULL, telegram_message_ids_json = ?, last_error_code = NULL, last_error_message = NULL, updated_at = ? WHERE id = ? AND status = 'processing' AND attempts = ?").bind(now, serializePublishProgress(progress.messages), now, task.id, task.attempts),
+      this.db.prepare("INSERT INTO publish_task_logs (id, tenant_id, task_id, attempt, status, message, duration_ms, created_at) SELECT ?, ?, ?, ?, 'succeeded', ?, NULL, ? WHERE EXISTS (SELECT 1 FROM publish_tasks WHERE id = ? AND status = 'succeeded' AND attempts = ? AND completed_at = ?)").bind(crypto.randomUUID(), task.tenant_id, task.id, task.attempts, JSON.stringify({ messageIds }), now, task.id, task.attempts, now),
+      this.db.prepare("UPDATE ad_orders SET status = CASE WHEN status IN ('scheduled', 'publishing', 'failed') THEN 'published' ELSE status END, published_at = ?, updated_at = ? WHERE id = ? AND EXISTS (SELECT 1 FROM publish_tasks WHERE id = ? AND status = 'succeeded' AND attempts = ? AND completed_at = ?)").bind(now, now, task.order_id, task.id, task.attempts, now),
+    ];
+    const results = await this.db.batch(statements);
+    if ((results[0]?.meta?.changes ?? 0) === 0) throw new PublishError("PUBLISH_TASK_LEASE_LOST", "发布已完成但任务租约已失效；请人工核对频道", false);
+  }
+
+  async markFailed(task: ProductionTaskRow, error: PublishError, now: string): Promise<"queued" | "dead_letter" | "uncertain" | "lease_lost"> {
+    let hasPartialProgress = false;
+    try { const progress = parseStoredPublishProgress(task.telegram_message_ids_json); hasPartialProgress = progress.legacyMessageIds.length > 0 || progress.messages.length > 0; } catch { hasPartialProgress = true; }
+    const outcomeUncertain = hasPartialProgress || error.code === "PUBLISH_NETWORK_ERROR" || error.code === "PUBLISH_PROGRESS_PERSIST_FAILED" || (error.code === "TELEGRAM_API_ERROR" && error.retryable);
+    const retry = error.retryable && !outcomeUncertain && task.attempts < task.max_attempts;
     const nextAt = retry ? new Date(Date.parse(now) + retryDelaySeconds(task.attempts, error.retryAfterSeconds) * 1000).toISOString() : null;
-    const status = retry ? "queued" : error.code === "PUBLISH_NETWORK_ERROR" ? "uncertain" : "dead_letter";
-    await this.db.prepare("UPDATE publish_tasks SET status = ?, available_at = COALESCE(?, available_at), locked_at = NULL, last_error_code = ?, last_error_message = ?, updated_at = ? WHERE id = ? AND status = 'processing'").bind(status, nextAt, error.code, error.message.slice(0, 500), now, task.id).run();
-    await this.db.prepare("INSERT INTO publish_task_logs (id, tenant_id, task_id, attempt, status, message, duration_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)").bind(crypto.randomUUID(), task.tenant_id, task.id, task.attempts, status, JSON.stringify({ code: error.code, message: error.message, retryAfterSeconds: error.retryAfterSeconds }), now).run();
-    if (status !== "queued") await this.db.prepare("UPDATE ad_orders SET status = 'failed', updated_at = ? WHERE id = ? AND status IN ('scheduled', 'publishing')").bind(now, task.order_id).run();
+    const status = retry ? "queued" : outcomeUncertain ? "uncertain" : "dead_letter";
+    if (!this.db.batch) throw new PublishError("PUBLISH_FINALIZE_UNAVAILABLE", "D1 不支持原子发布状态提交，任务需人工核对", false);
+    const errorMessage = error.message.slice(0, 500);
+    const statements = [
+      this.db.prepare("UPDATE publish_tasks SET status = ?, available_at = COALESCE(?, available_at), locked_at = NULL, last_error_code = ?, last_error_message = ?, updated_at = ? WHERE id = ? AND status = 'processing' AND attempts = ?").bind(status, nextAt, error.code, errorMessage, now, task.id, task.attempts),
+      this.db.prepare("INSERT INTO publish_task_logs (id, tenant_id, task_id, attempt, status, message, duration_ms, created_at) SELECT ?, ?, ?, ?, ?, ?, NULL, ? WHERE EXISTS (SELECT 1 FROM publish_tasks WHERE id = ? AND status = ? AND attempts = ? AND last_error_code = ?)").bind(crypto.randomUUID(), task.tenant_id, task.id, task.attempts, status, JSON.stringify({ code: error.code, message: error.message, retryAfterSeconds: error.retryAfterSeconds }), now, task.id, status, task.attempts, error.code),
+      this.db.prepare("UPDATE ad_orders SET status = 'failed', updated_at = ? WHERE ? <> 'queued' AND id = ? AND status IN ('scheduled', 'publishing') AND EXISTS (SELECT 1 FROM publish_tasks WHERE id = ? AND status = ? AND attempts = ? AND last_error_code = ?)").bind(now, status, task.order_id, task.id, status, task.attempts, error.code),
+    ];
+    const results = await this.db.batch(statements);
+    if ((results[0]?.meta?.changes ?? 0) === 0) return "lease_lost";
     return status;
   }
 
@@ -179,8 +253,9 @@ export class ProductionPublishRepository {
     return all<ProductionExpiration>(this.db, `SELECT o.id AS order_id, t.id AS task_id, t.tenant_id, t.workspace_id, t.channel_id, c.telegram_chat_id, t.telegram_message_ids_json, s.end_at
       FROM ad_orders o JOIN ad_schedules s ON s.order_id = o.id JOIN publish_tasks t ON t.schedule_id = s.id JOIN telegram_channels c ON c.id = t.channel_id
       WHERE o.status = 'published' AND s.end_at <= ? AND t.status = 'succeeded'
-        AND NOT EXISTS (SELECT 1 FROM publish_expiration_failures f WHERE f.task_id = t.id AND f.status IN ('succeeded', 'acknowledged'))
-      ORDER BY s.end_at ASC LIMIT 50`, now);
+        AND (NOT EXISTS (SELECT 1 FROM publish_expiration_failures f WHERE f.task_id = t.id)
+          OR EXISTS (SELECT 1 FROM publish_expiration_failures f WHERE f.task_id = t.id AND f.status IN ('pending', 'retrying') AND f.next_attempt_at <= ?))
+      ORDER BY s.end_at ASC LIMIT 50`, now, now);
   }
 
   async markExpired(expiration: ProductionExpiration, result: "succeeded" | "failed", now: string, errorMessage?: string): Promise<void> {
@@ -191,7 +266,7 @@ export class ProductionPublishRepository {
       const existing = await this.db.prepare("SELECT id, attempts FROM publish_expiration_failures WHERE task_id = ? LIMIT 1").bind(expiration.task_id).first<{ id: string; attempts: number }>();
       const attempts = Number(existing?.attempts ?? 0) + 1;
       const nextAttempt = new Date(Date.parse(now) + Math.min(3600, 60 * 2 ** Math.min(attempts - 1, 6)) * 1000).toISOString();
-      if (existing) await this.db.prepare("UPDATE publish_expiration_failures SET status = 'retrying', attempts = ?, next_attempt_at = ?, last_error = ?, last_attempt_at = ?, updated_at = ? WHERE id = ?").bind(attempts, nextAttempt, errorMessage ?? "到期删除失败", nextAttempt, now, existing.id).run();
+      if (existing) await this.db.prepare("UPDATE publish_expiration_failures SET status = 'retrying', attempts = ?, next_attempt_at = ?, last_error = ?, last_attempt_at = ?, updated_at = ? WHERE id = ?").bind(attempts, nextAttempt, errorMessage ?? "到期删除失败", now, now, existing.id).run();
       else await this.db.prepare("INSERT INTO publish_expiration_failures (id, tenant_id, workspace_id, order_id, task_id, channel_id, telegram_chat_id, message_ids_json, status, attempts, next_attempt_at, last_error, first_failed_at, last_attempt_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)").bind(crypto.randomUUID(), expiration.tenant_id, expiration.workspace_id, expiration.order_id, expiration.task_id, expiration.channel_id, expiration.telegram_chat_id, expiration.telegram_message_ids_json ?? "[]", attempts, nextAttempt, errorMessage ?? "到期删除失败", now, now, now, now).run();
       await raiseOperationalAlert(this.db, { fingerprint: `expiration-delete:${expiration.task_id}`, tenantId: expiration.tenant_id, workspaceId: expiration.workspace_id, severity: "critical", title: "广告到期删除失败", message: `订单 ${expiration.order_id} 的 Telegram 广告未能按时删除`, details: { taskId: expiration.task_id, attempts, nextAttempt, error: errorMessage ?? "到期删除失败" } }, now);
     }
@@ -205,32 +280,44 @@ export class ProductionPublishRepository {
   async acknowledgeExpirationFailure(scope: { tenantId: string; workspaceId: string }, failureId: string, userId: string, note: string, now: string): Promise<void> { const row = await this.db.prepare("SELECT id FROM publish_expiration_failures WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status IN ('pending', 'retrying') LIMIT 1").bind(failureId, scope.tenantId, scope.workspaceId).first<{ id: string }>(); if (!row) throw new BusinessValidationError("EXPIRATION_FAILURE_NOT_FOUND", "到期删除失败记录不存在或已处理"); await this.db.prepare("UPDATE publish_expiration_failures SET status = 'acknowledged', resolved_at = ?, resolved_by = ?, resolution_note = ?, updated_at = ? WHERE id = ?").bind(now, userId, note, now, failureId).run(); }
 }
 
+function isAlreadyDeleted(error: unknown): boolean {
+  return error instanceof TelegramApiError && error.errorCode === 400 && /message to delete not found/i.test(error.message);
+}
+
 export async function processProductionDuePublishTasks(env: ProductionPublishRuntimeEnv, now = new Date().toISOString()): Promise<{ processed: number; succeeded: number; retried: number; failed: number; expired: number; expirationFailed: number }> {
   if (!env.DB || !env.TELEGRAM_BOT_TOKEN) return { processed: 0, succeeded: 0, retried: 0, failed: 0, expired: 0, expirationFailed: 0 };
   const repository = new ProductionPublishRepository(env.DB);
   const publisher = new TelegramPublisher(new TelegramBotApiClient(env.TELEGRAM_BOT_TOKEN, (input, init) => fetch(input, init), env.TELEGRAM_API_BASE_URL ?? "https://api.telegram.org"));
   const result = { processed: 0, succeeded: 0, retried: 0, failed: 0, expired: 0, expirationFailed: 0 };
+  result.failed += await repository.markStaleProcessingUncertain(now);
   for (let index = 0; index < 10; index += 1) {
     const task = await repository.claimNextTask(now);
     if (!task) break;
     result.processed += 1;
+    let processingTask = task;
     try {
       const data = await repository.payload(task.id);
-      const messageIds = await publisher.publishMany(data.payload.telegram_chat_id, data.content, data.assets);
-      await repository.markSucceeded(task, messageIds, now);
+      processingTask = data.task;
+      const progress = parseStoredPublishProgress(data.task.telegram_message_ids_json);
+      if (progress.legacyMessageIds.length > 0) throw new PublishError("PUBLISH_PROGRESS_SOURCE_UNKNOWN", "旧版已发送消息无法映射到具体素材，任务需人工核对", false);
+      const messageIds = await publisher.publishMany(data.payload.telegram_chat_id, data.content, data.assets, (messageId, contentKey) => repository.recordPublishedMessage(processingTask, messageId, contentKey, now), progress.messages);
+      await repository.markSucceeded(processingTask, messageIds, now);
       result.succeeded += 1;
     } catch (error) {
       const failure = classifyPublishError(error);
-      const status = await repository.markFailed(task, failure, now);
-      if (status === "queued") result.retried += 1; else result.failed += 1;
+      const status = await repository.markFailed(processingTask, failure, now);
+      if (status === "queued") result.retried += 1; else if (status !== "lease_lost") result.failed += 1;
     }
   }
   for (const expiration of await repository.dueExpirations(now)) {
     let messageIds: number[] = [];
-    try { messageIds = JSON.parse(expiration.telegram_message_ids_json ?? "[]") as number[]; } catch { messageIds = []; }
+    try { messageIds = progressMessageIds(expiration.telegram_message_ids_json); } catch { messageIds = []; }
     try {
       if (messageIds.length === 0) throw new PublishError("NO_MESSAGE_IDS", "生产任务没有可删除的 Telegram message_id", false);
-      for (const messageId of messageIds) await publisher.client.deleteMessage(expiration.telegram_chat_id, messageId);
+      for (const messageId of messageIds) {
+        try { await publisher.client.deleteMessage(expiration.telegram_chat_id, messageId); }
+        catch (error) { if (!isAlreadyDeleted(error)) throw error; }
+      }
       await repository.markExpired(expiration, "succeeded", now);
       result.expired += 1;
     } catch (error) {

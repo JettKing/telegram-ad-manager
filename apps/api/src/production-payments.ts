@@ -9,7 +9,11 @@ interface D1Bound { first<T>(): Promise<T | null>; all?<T>(): Promise<{ results:
 interface BatchResult { meta?: { changes?: number } }
 
 async function all<T>(db: D1Like, query: string, ...values: unknown[]): Promise<T[]> { const prepared = db.prepare(query).bind(...values); return prepared.all ? (await prepared.all<T>()).results : []; }
-function refundDisbursementMethod(value: string): string { return ["bank_transfer", "alipay", "wechat", "cash", "crypto", "other"].includes(value) ? value : "other"; }
+function refundDisbursementMethod(value: string): string {
+  const allowed = ["bank_transfer", "alipay", "wechat", "cash", "crypto", "other"];
+  if (!allowed.includes(value)) throw new BusinessValidationError("INVALID_REFUND_DISBURSEMENT_METHOD", "退款出款方式无效");
+  return value;
+}
 
 export class ProductionPaymentRepository {
   constructor(private readonly db: D1Like) {}

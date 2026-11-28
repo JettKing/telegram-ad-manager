@@ -47,6 +47,7 @@ export async function readProductionPlatformSession(db: D1Like, token: string | 
   if (!token || !secret.trim()) return null; const [encoded, signature] = token.split("."); const sessionId = encoded ? fromBase64Url(encoded) : null; if (!sessionId || !signature || !safeEqual(await hmac(sessionId, secret), signature)) return null;
   const row = await db.prepare(`SELECT us.id AS sessionId, us.expires_at AS expiresAt, u.id AS userId, u.telegram_user_id AS telegramUserId, tm.tenant_id AS tenantId, wm.workspace_id AS workspaceId, wm.role
     FROM user_sessions us JOIN users u ON u.id = us.user_id AND u.is_active = 1 JOIN tenant_members tm ON tm.user_id = u.id AND tm.tenant_id = us.tenant_id AND tm.status = 'active'
+    JOIN tenants t ON t.id = tm.tenant_id AND t.status = 'active'
     JOIN workspace_members wm ON wm.user_id = u.id AND wm.tenant_id = tm.tenant_id AND wm.status = 'active' JOIN workspaces w ON w.id = wm.workspace_id AND w.status = 'active'
     WHERE us.id = ? AND us.token_hash = ? AND us.revoked_at IS NULL AND us.expires_at > ? LIMIT 1`).bind(sessionId, await sha256(token), now.toISOString()).first<IdentityContext>();
   if (!row) return null; await db.prepare("UPDATE user_sessions SET last_seen_at = ? WHERE id = ?").bind(now.toISOString(), sessionId).run(); return row;

@@ -6,7 +6,7 @@ import { D1ReplayStore, D1WebhookUpdateStore, MemoryWebhookUpdateStore, Producti
 import { telegramServiceState } from "@tg-ad-manager/telegram";
 import { hasPermission, issuePlatformSession, provisionTelegramIdentity, readPlatformSession, revokePlatformSession, type IdentityContext, type Permission } from "./identity.js";
 import { ChannelCheckError, D1ChannelRepository, TelegramBotApiClient, verifyTelegramChannel } from "./channels.js";
-import { D1MediaRepository } from "./media.js";
+import { D1MediaRepository, type MediaIngestResult } from "./media.js";
 import { BusinessValidationError, D1BusinessRepository, canTransitionOrder, parseCustomerInput, parsePackageInput, type OrderStatus } from "./business.js";
 import { D1PaymentRepository, parsePaymentInput, parsePaymentReviewInput, parseRefundInput, parseRefundReviewInput } from "./payments.js";
 import { D1PublishRepository, parseScheduleInput } from "./publishing.js";
@@ -181,10 +181,21 @@ app.use("/api/*", cors({
 
 app.get("/", (context) => context.json({ ok: true, service: "tg-ad-manager-api", message: "TG Ad Manager API is running", health: "/health", apiHealth: "/api/v1/health", webhook: "/webhooks/telegram" }));
 app.get("/health", (context) => context.json(healthPayload(runtimeEnv(context.env))));
-app.get("/health/ready", (context) => {
-  const health = healthPayload(runtimeEnv(context.env));
-  const requiredConfigured = health.dependencies.database === "configured";
-  return context.json({ ...health, ok: requiredConfigured, ready: requiredConfigured, blocking: requiredConfigured ? [] : ["database"] }, requiredConfigured ? 200 : 503);
+app.get("/health/ready", async (context) => {
+  const env = runtimeEnv(context.env);
+  const health = healthPayload(env);
+  const blocking: string[] = [];
+  if (!env.DB) blocking.push("database");
+  else {
+    try {
+      const probe = await env.DB.prepare("SELECT 1 AS ready").bind().first<{ ready: number }>();
+      if (probe?.ready !== 1) blocking.push("database");
+    } catch { blocking.push("database"); }
+  }
+  if (!env.TELEGRAM_BOT_TOKEN) blocking.push("telegram");
+  if (!env.R2_BUCKET) blocking.push("r2");
+  const ready = blocking.length === 0;
+  return context.json({ ...health, ok: ready, ready, blocking }, ready ? 200 : 503);
 });
 
 app.get("/api/v1/health", (context) => context.json(success(healthPayload(runtimeEnv(context.env)), requestId(context))));
@@ -193,9 +204,9 @@ app.get("/api/v1/operations/cron-liveness", async (context) => {
   const env = runtimeEnv(context.env);
   if (!env.DB || !productionContract(env)) return context.json(failure("OPERATIONS_NOT_CONFIGURED", "生产运维数据上下文尚未配置", requestId(context)), 503);
   const now = new Date(); const row = await env.DB.prepare("SELECT status, checked_at FROM ops_health_snapshots WHERE component = 'production_cron' ORDER BY checked_at DESC LIMIT 1").bind().first<{ status: string; checked_at: string }>();
-  const ageSeconds = row ? Math.max(0, Math.floor((now.getTime() - Date.parse(row.checked_at)) / 1000)) : null; const stale = ageSeconds === null || ageSeconds > 10 * 60;
+  const ageSeconds = row ? Math.max(0, Math.floor((now.getTime() - Date.parse(row.checked_at)) / 1000)) : null; const stale = ageSeconds === null || ageSeconds > 10 * 60; const failedStatus = !row || row.status !== "ok";
   if (stale) { await raiseOperationalAlert(env.DB, { fingerprint: "production-cron:liveness", severity: "critical", title: "生产 Cron 长时间未执行", message: row ? `最近一次 Cron 已超过 ${Math.floor((ageSeconds ?? 0) / 60)} 分钟未更新` : "生产 Cron 尚未产生健康快照", details: { lastCheckedAt: row?.checked_at ?? null, ageSeconds } }); await processNotificationOutbox(env.DB, env.TELEGRAM_BOT_TOKEN); }
-  return context.json(success({ healthy: !stale, stale, lastCheckedAt: row?.checked_at ?? null, lastStatus: row?.status ?? "missing", ageSeconds }, requestId(context)), stale ? 503 : 200);
+  return context.json(success({ healthy: !stale && !failedStatus, stale, lastCheckedAt: row?.checked_at ?? null, lastStatus: row?.status ?? "missing", ageSeconds }, requestId(context)), stale || failedStatus ? 503 : 200);
 });
 
 app.post("/api/v1/auth/telegram", async (context) => {
@@ -661,7 +672,26 @@ app.post("/webhooks/telegram", async (context) => {
   const env = runtimeEnv(context.env); const expectedSecret = env.TELEGRAM_WEBHOOK_SECRET; if (!expectedSecret) return context.json(failure("WEBHOOK_NOT_CONFIGURED", "Telegram Webhook Secret 尚未配置", requestId(context)), 503); if (!validateWebhookSecret(context.req.header("X-Telegram-Bot-Api-Secret-Token"), expectedSecret)) return context.json(failure("WEBHOOK_UNAUTHORIZED", "Webhook Secret 校验失败", requestId(context)), 401);
   let body: unknown; try { body = await context.req.json(); } catch { return context.json(failure("INVALID_JSON", "Webhook 请求体必须是有效 JSON", requestId(context)), 400); }
   const update = parseTelegramUpdate(body); if (!update) return context.json(failure("INVALID_UPDATE", "Webhook 请求缺少有效 update_id", requestId(context)), 400);
-  try { const store = env.DB && env.TELEGRAM_BOT_IDENTITY_ID ? (productionContract(env) ? new ProductionD1WebhookUpdateStore(env.DB, env.TELEGRAM_BOT_IDENTITY_ID) : new D1WebhookUpdateStore(env.DB, env.TELEGRAM_BOT_IDENTITY_ID)) : developmentWebhookStore; const result = await store.claim(update, JSON.stringify(body), new Date().toISOString()); const media = env.DB && env.TELEGRAM_BOT_IDENTITY_ID ? await mediaRepository(env.DB, env).ingest(env.TELEGRAM_BOT_IDENTITY_ID, body) : { handled: false, reason: "scope_not_found" as const }; let welcomeSent = false; const start = result.accepted ? parseStartCommand(body) : null; if (start && env.TELEGRAM_BOT_TOKEN) { try { await new TelegramBotApiClient(env.TELEGRAM_BOT_TOKEN, fetch, env.TELEGRAM_API_BASE_URL ?? "https://api.telegram.org").sendMessage(start.chatId, START_WELCOME_MESSAGE, { reply_markup: START_WELCOME_MARKUP }); welcomeSent = true; } catch (error) { console.error("telegram_start_welcome_failed", { updateId: update.update_id, message: error instanceof Error ? error.message : "unknown" }); } } return context.json(success({ received: true, accepted: result.accepted, duplicate: result.duplicate, updateId: update.update_id, media, welcomeSent }, requestId(context))); }
+  try {
+    const store = env.DB && env.TELEGRAM_BOT_IDENTITY_ID ? (productionContract(env) ? new ProductionD1WebhookUpdateStore(env.DB, env.TELEGRAM_BOT_IDENTITY_ID) : new D1WebhookUpdateStore(env.DB, env.TELEGRAM_BOT_IDENTITY_ID)) : developmentWebhookStore;
+    const result = await store.claim(update, JSON.stringify(body), new Date().toISOString());
+    if (result.busy) return context.json(failure("WEBHOOK_UPDATE_IN_PROGRESS", "相同 update 正在处理或等待回收，请 Telegram 稍后重试", requestId(context)), 503);
+    let media: MediaIngestResult | { handled: false; reason: "duplicate_update" } = { handled: false, reason: result.duplicate ? "duplicate_update" : "scope_not_found" };
+    let welcomeSent = false;
+    try {
+      if (result.accepted && env.DB && env.TELEGRAM_BOT_IDENTITY_ID) media = await mediaRepository(env.DB, env).ingest(env.TELEGRAM_BOT_IDENTITY_ID, body);
+      const start = result.accepted ? parseStartCommand(body) : null;
+      if (start && env.TELEGRAM_BOT_TOKEN) {
+        try { await new TelegramBotApiClient(env.TELEGRAM_BOT_TOKEN, fetch, env.TELEGRAM_API_BASE_URL ?? "https://api.telegram.org").sendMessage(start.chatId, START_WELCOME_MESSAGE, { reply_markup: START_WELCOME_MARKUP }); welcomeSent = true; }
+        catch (error) { console.error("telegram_start_welcome_failed", { updateId: update.update_id, message: error instanceof Error ? error.message : "unknown" }); }
+      }
+      if (result.accepted) await store.complete(update.update_id, new Date().toISOString());
+    } catch (error) {
+      if (result.accepted) await store.release(update.update_id);
+      throw error;
+    }
+    return context.json(success({ received: true, accepted: result.accepted, duplicate: result.duplicate, updateId: update.update_id, media, welcomeSent }, requestId(context)));
+  }
   catch (error) { console.error("telegram_webhook_persistence_error", { updateId: update.update_id, message: error instanceof Error ? error.message : "unknown" }); return context.json(failure("WEBHOOK_PERSISTENCE_FAILED", "Webhook 暂时无法持久化", requestId(context)), 503); }
 });
 

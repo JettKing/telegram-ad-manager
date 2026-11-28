@@ -41,11 +41,15 @@ export class ProductionOperationsRepository {
   }
 
   async retryTask(scope: { tenantId: string; workspaceId: string }, taskId: string, actorUserId: string, now: string, confirmUncertain = false): Promise<void> {
-    const task = await this.db.prepare("SELECT id, tenant_id, attempts, status FROM publish_tasks WHERE id = ? AND tenant_id = ? AND workspace_id = ? LIMIT 1").bind(taskId, scope.tenantId, scope.workspaceId).first<{ id: string; tenant_id: string; attempts: number; status: TaskStatus }>();
+    const task = await this.db.prepare("SELECT id, tenant_id, attempts, status, telegram_message_ids_json FROM publish_tasks WHERE id = ? AND tenant_id = ? AND workspace_id = ? LIMIT 1").bind(taskId, scope.tenantId, scope.workspaceId).first<{ id: string; tenant_id: string; attempts: number; status: TaskStatus; telegram_message_ids_json?: string }>();
     if (!task) throw new BusinessValidationError("PUBLISH_TASK_NOT_FOUND", "发布任务不存在或不属于当前工作空间");
     if (!["failed", "uncertain", "dead_letter", "cancelled"].includes(task.status)) throw new BusinessValidationError("PUBLISH_TASK_NOT_RETRYABLE", "当前任务状态不允许人工重试");
     if (task.status === "uncertain" && !confirmUncertain) throw new BusinessValidationError("PUBLISH_UNCERTAIN_CONFIRMATION_REQUIRED", "Telegram 发送结果不确定，重试可能重复发布；请先人工核对频道并明确确认");
-    const updated = await this.db.prepare("UPDATE publish_tasks SET status = 'queued', attempts = 0, available_at = ?, locked_at = NULL, completed_at = NULL, last_error_code = NULL, last_error_message = NULL, updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status = ?").bind(now, now, taskId, scope.tenantId, scope.workspaceId, task.status).run();
+    let progressJson = task.telegram_message_ids_json ?? "[]";
+    if (task.status === "uncertain" && confirmUncertain) {
+      try { if (Array.isArray(JSON.parse(progressJson))) progressJson = "[]"; } catch { progressJson = "[]"; }
+    }
+    const updated = await this.db.prepare("UPDATE publish_tasks SET status = 'queued', available_at = ?, locked_at = NULL, completed_at = NULL, telegram_message_ids_json = ?, last_error_code = NULL, last_error_message = NULL, updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status = ? AND attempts = ?").bind(now, progressJson, now, taskId, scope.tenantId, scope.workspaceId, task.status, task.attempts).run();
     if ((updated.meta?.changes ?? 0) === 0) throw new BusinessValidationError("PUBLISH_TASK_STATE_CHANGED", "任务状态已变化，请刷新后重新核对");
     await this.db.prepare("INSERT INTO publish_task_logs (id, tenant_id, task_id, attempt, status, message, duration_ms, created_at) VALUES (?, ?, ?, ?, 'manual_retry', ?, NULL, ?)").bind(crypto.randomUUID(), task.tenant_id, taskId, task.attempts, JSON.stringify({ actorUserId }), now).run();
   }

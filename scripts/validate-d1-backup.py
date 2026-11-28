@@ -10,6 +10,8 @@ REQUIRED_TABLES = {
     "users",
     "tenants",
     "workspaces",
+    "ad_packages",
+    "ad_orders",
     "publish_tasks",
     "publish_task_logs",
     "ops_health_snapshots",
@@ -32,6 +34,17 @@ REFUND_0018_INDEXES = {
     "idx_payment_submissions_request_idempotency",
     "idx_ad_order_refunds_request_idempotency",
 }
+MULTICURRENCY_0019_COLUMNS = {
+    "ad_packages": {"currency_scale", "network"},
+    "ad_orders": {"currency_scale", "network"},
+    "payment_submissions": {"amount_scale", "network"},
+    "ad_order_refunds": {
+        "currency", "amount_scale", "network", "actual_amount_minor",
+        "actual_currency", "actual_network", "payment_submission_id",
+    },
+    "financial_ledger_entries": {"amount_scale", "network"},
+}
+MULTICURRENCY_0019_INDEXES = {"idx_order_refunds_payment_submission"}
 
 
 def main() -> int:
@@ -63,6 +76,9 @@ def main() -> int:
         applied_0018 = migration_table and connection.execute(
             "SELECT 1 FROM d1_migrations WHERE name = '0018_refund_disbursement.sql' LIMIT 1"
         ).fetchone() is not None
+        applied_0019 = migration_table and connection.execute(
+            "SELECT 1 FROM d1_migrations WHERE name = '0019_multi_currency_finance.sql' LIMIT 1"
+        ).fetchone() is not None
         if applied_0018:
             missing_columns = sorted(REFUND_0018_COLUMNS - refund_columns)
             missing_indexes = sorted(REFUND_0018_INDEXES - indexes)
@@ -90,8 +106,39 @@ def main() -> int:
             if null_keys or duplicate_keys:
                 print(f"0018 payment-key prerequisites failed: NULL={null_keys}, duplicate groups={duplicate_keys}", file=sys.stderr)
                 return 1
+        columns_by_table = {
+            table: {row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')}
+            for table in MULTICURRENCY_0019_COLUMNS
+        }
+        if applied_0019:
+            missing_0019_columns = {
+                table: sorted(required - columns_by_table[table])
+                for table, required in MULTICURRENCY_0019_COLUMNS.items()
+                if required - columns_by_table[table]
+            }
+            missing_0019_indexes = sorted(MULTICURRENCY_0019_INDEXES - indexes)
+            if missing_0019_columns or missing_0019_indexes:
+                print(
+                    f"0019 is recorded but schema is incomplete; missing columns={missing_0019_columns}, indexes={missing_0019_indexes}",
+                    file=sys.stderr,
+                )
+                return 1
+        else:
+            present_0019_columns = {
+                table: sorted(required & columns_by_table[table])
+                for table, required in MULTICURRENCY_0019_COLUMNS.items()
+                if required & columns_by_table[table]
+            }
+            present_0019_indexes = sorted(MULTICURRENCY_0019_INDEXES & indexes)
+            if present_0019_columns or present_0019_indexes:
+                print(
+                    f"0019 schema objects exist but migration is not recorded; refusing an unsafe replay; columns={present_0019_columns}, indexes={present_0019_indexes}",
+                    file=sys.stderr,
+                )
+                return 1
         row_count = connection.execute("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'").fetchone()[0]
-        state = "0018 already recorded and complete" if applied_0018 else "0018 prerequisites verified"
+        applied = [name for name, state in (("0018", applied_0018), ("0019", applied_0019)) if state]
+        state = f"migrations recorded and complete: {', '.join(applied)}" if applied else "0018/0019 prerequisites verified"
         print(f"backup validation passed: {backup.name}; tables={row_count}; integrity=ok; {state}")
         return 0
     except sqlite3.Error as error:
