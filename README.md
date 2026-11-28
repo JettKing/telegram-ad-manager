@@ -6,7 +6,7 @@ TG Ad Manager 是 Telegram 广告管理 SaaS 的工程基线，按多租户、�
 
 Cloudflare 生产 D1 迁移 0018（退款实际出款）与 0019（多币种财务）均已受控应用；后端 Worker 与前端 Finance UI 已部署。人工财务支持 CNY、USD、TON、USDT，USDT 网络为 TON、TRON；币种选项仅显示代码。CI、测试、类型检查和构建成功。历史迁移仍在 `apps/api/production-migrations/archive/`，Wrangler 仅扫描 `active/`，避免错误重放。
 
-必须区分代码/CI 通过、部署完成与真实生产业务验收。D1 迁移、Worker、Pages 均已部署，健康探测返回 200；但测试租户/频道 Telegram 全链路和多币种收款/退款对账仍未完成。订阅生产 schema 尚未接入，相关接口保持阻断。详见 `PROJECT_STATUS.md` 和 `TODO.md`。
+必须区分代码/CI 通过、部署完成与真实生产业务验收。操作者已确认 Bot `/start` 回复、Mini App 打开、测试频道绑定，以及通过生产后台向测试频道发送消息并验证到期删除。完整订单/媒体/多币种收款退款对账、客户通知和失败恢复仍需分别验收；订阅生产 schema 尚未接入，相关接口保持阻断。详见 `PROJECT_STATUS.md` 和 `TODO.md`。
 
 ## 开发
 

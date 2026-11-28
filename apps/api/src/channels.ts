@@ -221,6 +221,28 @@ export class D1ChannelRepository {
     return { channelId, status };
   }
 
+  async recheckVerified(channelId: string, input: { tenantId: string; workspaceId: string; verified: VerifiedChannel; now: string }): Promise<{ channelId: string; status: string } | null> {
+    const status = input.verified.permissions.canPost ? "active" : "permission_error";
+    const updated = await this.db.prepare(
+      "UPDATE telegram_channels SET username = ?, title = ?, status = ?, can_post = ?, can_pin = ?, can_delete = ?, last_verified_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status != 'unbound'",
+    ).bind(input.verified.username ?? null, input.verified.title, status, input.verified.permissions.canPost ? 1 : 0, input.verified.permissions.canPin ? 1 : 0, input.verified.permissions.canDelete ? 1 : 0, input.verified.permissions.checkedAt, input.now, channelId, input.tenantId, input.workspaceId).run();
+    if ((updated.meta?.changes ?? 0) === 0) return null;
+    for (const permission of ["post", "pin", "delete"] as const) {
+      const granted = permission === "post" ? input.verified.permissions.canPost : permission === "pin" ? input.verified.permissions.canPin : input.verified.permissions.canDelete;
+      await this.db.prepare(
+        `INSERT INTO telegram_channel_permissions (id, channel_id, permission, granted, checked_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (channel_id, permission) DO UPDATE SET granted = excluded.granted, checked_at = excluded.checked_at`,
+      ).bind(crypto.randomUUID(), channelId, permission, granted ? 1 : 0, input.verified.permissions.checkedAt).run();
+    }
+    return { channelId, status };
+  }
+
+  async markVerificationFailed(channelId: string, tenantId: string, workspaceId: string, now: string, _failure: { code: string; message: string }): Promise<boolean> {
+    const result = await this.db.prepare("UPDATE telegram_channels SET status = 'permission_error', can_post = 0, updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status != 'unbound'").bind(now, channelId, tenantId, workspaceId).run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
   async unbind(channelId: string, tenantId: string, workspaceId: string, now: string): Promise<boolean> {
     const result = await this.db.prepare(
       `UPDATE telegram_channels SET status = 'unbound', updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status != 'unbound'`,

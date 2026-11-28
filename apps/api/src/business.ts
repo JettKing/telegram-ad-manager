@@ -143,7 +143,7 @@ function orderNumber(now: Date): string {
 }
 
 interface CustomerRow { id: string; name: string; contact?: string; telegram_user_id?: string; telegram_username?: string; source?: string; notes?: string; status: CustomerStatus; total_spend_minor: number; last_order_at?: string; created_at: string; updated_at: string }
-interface PackageRow { id: string; name: string; description?: string; ad_type: string; publish_count: number; price_minor: number; currency: AssetCode; currency_scale: number; network?: string | null; discount_price_minor?: number; is_enabled: number; is_public: number; created_at: string; updated_at: string }
+interface PackageRow { id: string; name: string; description?: string; ad_type: string; publish_count: number; display_duration_seconds?: number | null; pin_duration_seconds?: number | null; publish_interval_seconds?: number | null; auto_unpin?: number; attempt_auto_delete?: number; delete_failure_policy?: string; price_minor: number; currency: AssetCode; currency_scale: number; network?: string | null; discount_price_minor?: number; is_enabled: number; is_public: number; created_at: string; updated_at: string }
 interface OrderRow { id: string; order_no: string; customer_id: string; channel_id: string; package_id: string; amount_minor: number; discount_minor: number; receivable_minor: number; currency: AssetCode; currency_scale: number; network?: string | null; payment_status: string; status: OrderStatus; content_json: string; created_at: string; updated_at: string }
 
 async function all<T>(db: D1Like, query: string, ...values: unknown[]): Promise<T[]> {
@@ -170,8 +170,13 @@ export class D1BusinessRepository {
     return (result.meta?.changes ?? 0) > 0;
   }
 
+  async setCustomerStatus(scope: { tenantId: string; workspaceId: string }, customerId: string, status: "normal" | "inactive", now: string): Promise<boolean> {
+    const result = await this.db.prepare("UPDATE customers SET status = ?, updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ?").bind(status, now, customerId, scope.tenantId, scope.workspaceId).run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
   async listPackages(tenantId: string, workspaceId: string): Promise<PackageRow[]> {
-    return all<PackageRow>(this.db, "SELECT id, name, description, ad_type, publish_count, price_minor, currency, currency_scale, network, discount_price_minor, is_enabled, is_public, created_at, updated_at FROM ad_packages WHERE tenant_id = ? AND workspace_id = ? ORDER BY updated_at DESC LIMIT 200", tenantId, workspaceId);
+    return all<PackageRow>(this.db, "SELECT id, name, description, ad_type, publish_count, display_duration_seconds, pin_duration_seconds, publish_interval_seconds, auto_unpin, attempt_auto_delete, delete_failure_policy, price_minor, currency, currency_scale, network, discount_price_minor, is_enabled, is_public, created_at, updated_at FROM ad_packages WHERE tenant_id = ? AND workspace_id = ? ORDER BY updated_at DESC LIMIT 200", tenantId, workspaceId);
   }
 
   async createPackage(scope: { tenantId: string; workspaceId: string }, input: PackageInput, now: string): Promise<string> {
@@ -185,9 +190,15 @@ export class D1BusinessRepository {
     return (result.meta?.changes ?? 0) > 0;
   }
 
+  async setPackageEnabled(scope: { tenantId: string; workspaceId: string }, packageId: string, enabled: boolean, now: string): Promise<boolean> {
+    const result = await this.db.prepare("UPDATE ad_packages SET is_enabled = ?, updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ?").bind(enabled ? 1 : 0, now, packageId, scope.tenantId, scope.workspaceId).run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
   private async assertOrderReferences(scope: { tenantId: string; workspaceId: string }, input: CreateOrderInput, content: OrderContent): Promise<{ amountMinor: number; currency: AssetCode; currencyScale: number; network: string | null }> {
-    const customer = await this.db.prepare("SELECT id FROM customers WHERE id = ? AND tenant_id = ? AND workspace_id = ? LIMIT 1").bind(input.customerId, scope.tenantId, scope.workspaceId).first<{ id: string }>();
+    const customer = await this.db.prepare("SELECT id, status FROM customers WHERE id = ? AND tenant_id = ? AND workspace_id = ? LIMIT 1").bind(input.customerId, scope.tenantId, scope.workspaceId).first<{ id: string; status: string }>();
     if (!customer) throw new BusinessValidationError("CUSTOMER_NOT_FOUND", "客户不存在或不属于当前工作空间");
+    if (customer.status === "inactive" || customer.status === "archived") throw new BusinessValidationError("CUSTOMER_INACTIVE", "该客户已停用，不能创建新订单；历史订单记录仍保留");
     const packageRow = await this.db.prepare("SELECT id, price_minor, discount_price_minor, currency, currency_scale, network FROM ad_packages WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND is_enabled = 1 LIMIT 1").bind(input.packageId, scope.tenantId, scope.workspaceId).first<{ id: string; price_minor: number; discount_price_minor?: number; currency: AssetCode; currency_scale: number; network: string | null }>();
     if (!packageRow) throw new BusinessValidationError("PACKAGE_NOT_FOUND", "套餐不存在、已停用或不属于当前工作空间");
     const channel = await this.db.prepare("SELECT id FROM telegram_channels WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status = 'active' LIMIT 1").bind(input.channelId, scope.tenantId, scope.workspaceId).first<{ id: string }>();

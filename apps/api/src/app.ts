@@ -506,6 +506,18 @@ app.patch("/api/v1/customers/:customerId", requireAuth("customer:write"), async 
   catch (error) { return businessError(context, error, requestId(context)); }
 });
 
+app.patch("/api/v1/customers/:customerId/status", requireAuth("customer:write"), async (context) => {
+  const env = runtimeEnv(context.env); const auth = context.get("auth");
+  if (!env.DB || !auth) return context.json(failure("CRM_NOT_CONFIGURED", "CRM 数据库上下文尚未配置", requestId(context)), 503);
+  try {
+    const body = await context.req.json() as { status?: unknown };
+    if (body.status !== "normal" && body.status !== "inactive") throw new BusinessValidationError("INVALID_CUSTOMER_STATUS", "客户状态必须是 normal 或 inactive");
+    const updated = await businessRepository(env.DB, env).setCustomerStatus({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, context.req.param("customerId"), body.status, new Date().toISOString());
+    if (!updated) return context.json(failure("CUSTOMER_NOT_FOUND", "客户不存在或不属于当前工作空间", requestId(context)), 404);
+    return context.json(success({ updated: true, status: body.status }, requestId(context)));
+  } catch (error) { return businessError(context, error, requestId(context)); }
+});
+
 app.get("/api/v1/packages", requireAuth("order:read"), async (context) => {
   const env = runtimeEnv(context.env); const auth = context.get("auth");
   if (!env.DB || !auth) return context.json(failure("PACKAGE_NOT_CONFIGURED", "套餐数据库上下文尚未配置", requestId(context)), 503);
@@ -524,6 +536,18 @@ app.patch("/api/v1/packages/:packageId", requireAuth("order:write"), async (cont
   if (!env.DB || !auth) return context.json(failure("PACKAGE_NOT_CONFIGURED", "套餐数据库上下文尚未配置", requestId(context)), 503);
   try { const updated = await businessRepository(env.DB, env).updatePackage({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, context.req.param("packageId"), parsePackageInput(await context.req.json()), new Date().toISOString()); if (!updated) return context.json(failure("PACKAGE_NOT_FOUND", "套餐不存在或不属于当前工作空间", requestId(context)), 404); return context.json(success({ updated: true }, requestId(context))); }
   catch (error) { return businessError(context, error, requestId(context)); }
+});
+
+app.patch("/api/v1/packages/:packageId/status", requireAuth("order:write"), async (context) => {
+  const env = runtimeEnv(context.env); const auth = context.get("auth");
+  if (!env.DB || !auth) return context.json(failure("PACKAGE_NOT_CONFIGURED", "套餐数据库上下文尚未配置", requestId(context)), 503);
+  try {
+    const body = await context.req.json() as { enabled?: unknown };
+    if (typeof body.enabled !== "boolean") throw new BusinessValidationError("INVALID_PACKAGE_STATUS", "enabled 必须是布尔值");
+    const updated = await businessRepository(env.DB, env).setPackageEnabled({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, context.req.param("packageId"), body.enabled, new Date().toISOString());
+    if (!updated) return context.json(failure("PACKAGE_NOT_FOUND", "套餐不存在或不属于当前工作空间", requestId(context)), 404);
+    return context.json(success({ updated: true, enabled: body.enabled }, requestId(context)));
+  } catch (error) { return businessError(context, error, requestId(context)); }
 });
 
 app.get("/api/v1/orders", requireAuth("order:read"), async (context) => {
@@ -666,9 +690,17 @@ app.post("/api/v1/channels/bind", requireAuth("channel:manage"), async (context)
 app.post("/api/v1/channels/:channelId/recheck", requireAuth("channel:manage"), async (context) => {
   const env = runtimeEnv(context.env); const auth = context.get("auth"); const config = channelApiConfig(env);
   if (!config || !auth) return context.json(failure("CHANNEL_RECHECK_NOT_CONFIGURED", "频道复核依赖尚未配置", requestId(context)), 503);
-  const channelId = context.req.param("channelId"); const repo = channelRepository(config.db, env); const existing = await repo.findByIdScoped(channelId, auth.tenantId, auth.workspaceId); if (!existing) return context.json(failure("CHANNEL_NOT_FOUND", "频道不存在或不属于当前工作空间", requestId(context)), 404);
-  try { const verified = await verifyTelegramChannel(config.client, existing.telegram_chat_id); const saved = await repo.upsertVerified({ tenantId: auth.tenantId, workspaceId: auth.workspaceId, botIdentityId: config.botIdentityId, verified, now: new Date().toISOString() }); return context.json(success({ channelId: saved.channelId, status: saved.status, permissions: verified.permissions }, requestId(context))); }
-  catch (error) { if (error instanceof ChannelCheckError) return context.json(failure(`CHANNEL_${error.code}`, error.message, requestId(context)), 503); return context.json(failure("CHANNEL_RECHECK_FAILED", "频道权限复核失败", requestId(context)), 503); }
+  const channelId = context.req.param("channelId"); const repo = channelRepository(config.db, env); const existing = await repo.findByIdScoped(channelId, auth.tenantId, auth.workspaceId); if (!existing) return context.json(failure("CHANNEL_NOT_FOUND", "频道不存在或不属于当前工作空间", requestId(context)), 404); if (existing.status === "unbound") return context.json(failure("CHANNEL_UNBOUND", "该频道已解绑；请通过重新绑定操作显式恢复", requestId(context)), 409);
+  try { const verified = await verifyTelegramChannel(config.client, existing.telegram_chat_id); const saved = await repo.recheckVerified(channelId, { tenantId: auth.tenantId, workspaceId: auth.workspaceId, verified, now: new Date().toISOString() }); if (!saved) return context.json(failure("CHANNEL_UNBOUND", "权限复核期间频道已解绑；请通过重新绑定操作显式恢复", requestId(context)), 409); return context.json(success({ channelId: saved.channelId, status: saved.status, permissions: verified.permissions }, requestId(context))); }
+  catch (error) {
+    const checkError = error instanceof ChannelCheckError;
+    const code = checkError ? error.code : "RECHECK_FAILED";
+    const message = checkError ? error.message : "频道权限复核失败";
+    try { await repo.markVerificationFailed(channelId, auth.tenantId, auth.workspaceId, new Date().toISOString(), { code, message }); }
+    catch (markError) { console.error("telegram_channel_recheck_failure_state_error", { channelId, message: markError instanceof Error ? markError.message : "unknown" }); }
+    if (checkError) return context.json(failure(`CHANNEL_${code}`, message, requestId(context)), 503);
+    return context.json(failure("CHANNEL_RECHECK_FAILED", "频道权限复核失败", requestId(context)), 503);
+  }
 });
 
 app.post("/api/v1/channels/:channelId/unbind", requireAuth("channel:manage"), async (context) => {

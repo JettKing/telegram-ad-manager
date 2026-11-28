@@ -33,6 +33,28 @@ export class ProductionChannelRepository {
     return { channelId, status };
   }
 
+  async recheckVerified(channelId: string, input: { tenantId: string; workspaceId: string; verified: VerifiedChannel; now: string }): Promise<{ channelId: string; status: string } | null> {
+    const status = input.verified.permissions.canPost ? "active" : "permission_error";
+    const updated = await this.db.prepare("UPDATE telegram_channels SET username = ?, title = ?, status = ?, last_verified_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status != 'unbound'")
+      .bind(input.verified.username ?? null, input.verified.title, status, input.verified.permissions.checkedAt, input.now, channelId, input.tenantId, input.workspaceId).run();
+    if ((updated.meta?.changes ?? 0) === 0) return null;
+    const current = await this.db.prepare("SELECT id FROM telegram_channel_permissions WHERE channel_id = ? AND tenant_id = ? ORDER BY checked_at DESC LIMIT 1").bind(channelId, input.tenantId).first<{ id: string }>();
+    if (current) await this.db.prepare("UPDATE telegram_channel_permissions SET can_post_messages = ?, can_pin_messages = ?, can_delete_messages = ?, checked_at = ?, error_code = NULL, error_message = NULL WHERE id = ?").bind(input.verified.permissions.canPost ? 1 : 0, input.verified.permissions.canPin ? 1 : 0, input.verified.permissions.canDelete ? 1 : 0, input.verified.permissions.checkedAt, current.id).run();
+    else await this.db.prepare("INSERT INTO telegram_channel_permissions (id, tenant_id, channel_id, can_post_messages, can_pin_messages, can_delete_messages, checked_at, error_code, error_message) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)").bind(crypto.randomUUID(), input.tenantId, channelId, input.verified.permissions.canPost ? 1 : 0, input.verified.permissions.canPin ? 1 : 0, input.verified.permissions.canDelete ? 1 : 0, input.verified.permissions.checkedAt).run();
+    return { channelId, status };
+  }
+
+  async markVerificationFailed(channelId: string, tenantId: string, workspaceId: string, now: string, failure: { code: string; message: string }): Promise<boolean> {
+    const result = await this.db.prepare("UPDATE telegram_channels SET status = 'permission_error', updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status != 'unbound'").bind(now, channelId, tenantId, workspaceId).run();
+    if ((result.meta?.changes ?? 0) === 0) return false;
+    const current = await this.db.prepare("SELECT id FROM telegram_channel_permissions WHERE channel_id = ? AND tenant_id = ? ORDER BY checked_at DESC LIMIT 1").bind(channelId, tenantId).first<{ id: string }>();
+    const code = failure.code.slice(0, 80);
+    const message = failure.message.slice(0, 500);
+    if (current) await this.db.prepare("UPDATE telegram_channel_permissions SET can_post_messages = 0, checked_at = ?, error_code = ?, error_message = ? WHERE id = ?").bind(now, code, message, current.id).run();
+    else await this.db.prepare("INSERT INTO telegram_channel_permissions (id, tenant_id, channel_id, can_post_messages, can_pin_messages, can_delete_messages, checked_at, error_code, error_message) VALUES (?, ?, ?, 0, 0, 0, ?, ?, ?)").bind(crypto.randomUUID(), tenantId, channelId, now, code, message).run();
+    return true;
+  }
+
   async unbind(channelId: string, tenantId: string, workspaceId: string, now: string): Promise<boolean> {
     const result = await this.db.prepare("UPDATE telegram_channels SET status = 'unbound', updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status != 'unbound'").bind(now, channelId, tenantId, workspaceId).run();
     return (result.meta?.changes ?? 0) > 0;

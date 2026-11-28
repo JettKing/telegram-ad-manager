@@ -95,6 +95,19 @@ describe("RBAC permission matrix", () => {
     expect(hasPermission("manager", "settings:write")).toBe(false);
     expect(hasPermission("owner", "settings:write")).toBe(true);
   });
+
+  it("keeps customer, package and channel mutations behind their management permissions", () => {
+    for (const role of ["owner", "admin", "manager"] as const) {
+      expect(hasPermission(role, "customer:write")).toBe(true);
+      expect(hasPermission(role, "order:write")).toBe(true);
+      expect(hasPermission(role, "channel:manage")).toBe(true);
+    }
+    for (const role of ["finance", "viewer"] as const) {
+      expect(hasPermission(role, "customer:write")).toBe(false);
+      expect(hasPermission(role, "order:write")).toBe(false);
+      expect(hasPermission(role, "channel:manage")).toBe(false);
+    }
+  });
 });
 
 describe("platform sessions", () => {

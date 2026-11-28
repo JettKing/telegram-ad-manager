@@ -9,8 +9,8 @@ export type SessionUser = { id: string; telegramUserId: string; displayName: str
 export type AuthData = { authenticated: boolean; user: SessionUser; tenant: { id: string; name: string }; workspace: { id: string; name: string }; role: string; permissions?: string[]; session: { token: string; expiresAt: string } };
 type AuthMeData = { authenticated?: boolean; userId?: string; tenantId?: string; workspaceId?: string; role?: string; permissions?: string[]; expiresAt?: string };
 export type Channel = { id: string; telegram_chat_id: string; username?: string; title: string; status: string; can_post: number; can_pin: number; can_delete: number };
-export type Customer = { id: string; name: string; contact?: string; telegram_username?: string; status: string; total_spend_minor: number; updated_at: string };
-export type Package = { id: string; name: string; description?: string; ad_type: string; publish_count: number; price_minor: number; currency: string; currency_scale: number; network?: string | null; is_enabled: number; is_public: number };
+export type Customer = { id: string; name: string; contact?: string; telegram_user_id?: string; telegram_username?: string; source?: string; notes?: string; status: string; total_spend_minor: number; updated_at: string };
+export type Package = { id: string; name: string; description?: string; ad_type: string; publish_count: number; display_duration_seconds?: number | null; pin_duration_seconds?: number | null; publish_interval_seconds?: number | null; auto_unpin?: number; attempt_auto_delete?: number; delete_failure_policy?: string; price_minor: number; currency: string; currency_scale: number; network?: string | null; discount_price_minor?: number | null; is_enabled: number; is_public: number };
 export type Order = { id: string; order_no: string; customer_id: string; channel_id: string; package_id: string; receivable_minor: number; currency: string; currency_scale: number; network?: string | null; payment_status: string; status: string; content_json: string; created_at: string; updated_at: string };
 export type Schedule = { id: string; order_id: string; scheduled_at: string; status: string; created_at: string } & Record<string, unknown>;
 export type PublishTask = { id: string; order_id: string; status: string; attempt_count: number; scheduled_at?: string; last_error?: string } & Record<string, unknown>;
@@ -41,10 +41,16 @@ export const removeWorkspaceMember = (userId: string) => request<{ removed: bool
 export const getAuditLogs = (limit = 100) => request<{ logs: AuditLog[] }>(`/api/v1/audit-logs?limit=${limit}`);
 export const getChannels = () => request<{ channels: Channel[] }>("/api/v1/channels");
 export const bindChannel = (chatId: string) => request<{ channelId: string; status: string; title: string; telegramChatId: string }>("/api/v1/channels/bind", { method: "POST", body: JSON.stringify({ chatId }) });
+export const recheckChannel = (channelId: string) => request<{ channelId: string; status: string; permissions: Record<string, boolean> }>(`/api/v1/channels/${encodeURIComponent(channelId)}/recheck`, { method: "POST" });
+export const unbindChannel = (channelId: string) => request<{ unbound: boolean; channelId: string }>(`/api/v1/channels/${encodeURIComponent(channelId)}/unbind`, { method: "POST" });
 export const getCustomers = () => request<{ customers: Customer[] }>("/api/v1/customers");
 export const createCustomer = (input: Record<string, unknown>) => request<{ customerId: string }>("/api/v1/customers", { method: "POST", body: JSON.stringify(input) });
+export const updateCustomer = (customerId: string, input: Record<string, unknown>) => request<{ updated: boolean }>(`/api/v1/customers/${encodeURIComponent(customerId)}`, { method: "PATCH", body: JSON.stringify(input) });
+export const setCustomerStatus = (customerId: string, status: "normal" | "inactive") => request<{ updated: boolean; status: string }>(`/api/v1/customers/${encodeURIComponent(customerId)}/status`, { method: "PATCH", body: JSON.stringify({ status }) });
 export const getPackages = () => request<{ packages: Package[] }>("/api/v1/packages");
 export const createPackage = (input: Record<string, unknown>) => request<{ packageId: string }>("/api/v1/packages", { method: "POST", body: JSON.stringify(input) });
+export const updatePackage = (packageId: string, input: Record<string, unknown>) => request<{ updated: boolean }>(`/api/v1/packages/${encodeURIComponent(packageId)}`, { method: "PATCH", body: JSON.stringify(input) });
+export const setPackageEnabled = (packageId: string, enabled: boolean) => request<{ updated: boolean; enabled: boolean }>(`/api/v1/packages/${encodeURIComponent(packageId)}/status`, { method: "PATCH", body: JSON.stringify({ enabled }) });
 export const getOrders = () => request<{ orders: Order[] }>("/api/v1/orders");
 export const createOrder = (input: Record<string, unknown>) => request<{ orderId: string; orderNo: string; receivableMinor: number }>("/api/v1/orders", { method: "POST", body: JSON.stringify(input) });
 export const submitOrder = (orderId: string) => request<{ updated: boolean; status: string }>(`/api/v1/orders/${orderId}/submit`, { method: "POST" });
