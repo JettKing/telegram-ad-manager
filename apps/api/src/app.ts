@@ -178,6 +178,15 @@ app.use("/api/*", cors({
   allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   exposeHeaders: ["X-Request-Id"],
 }));
+app.use("/health/*", cors({
+  origin: (origin, context) => {
+    const allowedOrigin = runtimeEnv(context.env).WEB_APP_ORIGIN?.trim();
+    return allowedOrigin && origin === allowedOrigin ? origin : undefined;
+  },
+  allowHeaders: ["Content-Type", "Authorization", "X-Telegram-Init-Data"],
+  allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  exposeHeaders: ["X-Request-Id"],
+}));
 
 app.get("/", (context) => context.json({ ok: true, service: "tg-ad-manager-api", message: "TG Ad Manager API is running", health: "/health", apiHealth: "/api/v1/health", webhook: "/webhooks/telegram" }));
 app.get("/health", (context) => context.json(healthPayload(runtimeEnv(context.env))));

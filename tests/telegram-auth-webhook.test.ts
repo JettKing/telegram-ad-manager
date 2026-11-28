@@ -166,6 +166,18 @@ describe("Telegram Webhook", () => {
     expect(successfulAssetInserts).toBe(1);
   });
 
+  it("allows the configured Mini App origin to read the readiness probe", async () => {
+    const db = { prepare: () => ({ bind: () => ({ first: async () => ({ ready: 1 }) }) }) } as never;
+    const origin = "https://telegram-ad-manager.pages.dev";
+    const env = { DB: db, TELEGRAM_BOT_TOKEN: "test-token", R2_BUCKET: { put: async () => undefined }, WEB_APP_ORIGIN: origin };
+    const response = await app.request("/health/ready", { headers: { Origin: origin } }, env as never);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe(origin);
+
+    const untrusted = await app.request("/health/ready", { headers: { Origin: "https://untrusted.example" } }, env as never);
+    expect(untrusted.headers.get("Access-Control-Allow-Origin")).toBeNull();
+  });
+
   it("marks readiness blocked when the required R2 proof bucket is missing", async () => {
     const db = { prepare: () => ({ bind: () => ({ first: async () => ({ ready: 1 }) }) }) } as never;
     const baseEnv = { DB: db, TELEGRAM_BOT_TOKEN: "test-token" };
