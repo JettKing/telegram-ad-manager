@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Activity, Bell, CalendarDays, ChevronRight, CircleDollarSign, ClipboardList, FileImage, LayoutDashboard, LogOut, Menu, Megaphone, PackageOpen, Radio, RefreshCw, Send, ShieldCheck, Users, X } from "lucide-react";
 import type { HealthPayload } from "@tg-ad-manager/contracts";
@@ -25,8 +25,6 @@ function App() {
   const [auth, setAuth] = useState<AuthData | null>(null);
   const [health, setHealth] = useState<HealthPayload | null>(null);
   const [readiness, setReadiness] = useState<HealthReadiness | null>(null);
-  const [readinessError, setReadinessError] = useState("");
-  const [readinessLoading, setReadinessLoading] = useState(true);
   const [data, setData] = useState<DataState>(emptyData);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -61,30 +59,7 @@ function App() {
     setData(next); setRefreshing(false);
   };
 
-  const probeReadiness = useCallback(async (signal?: AbortSignal) => {
-    setReadinessLoading(true);
-    setReadinessError("");
-    try {
-      const result = await getReadiness(signal);
-      if (!signal?.aborted) setReadiness(result);
-    } catch (reason) {
-      if (!signal?.aborted) {
-        setReadiness(null);
-        setReadinessError(reason instanceof ApiError ? `[${reason.code}] ${reason.message}（HTTP ${reason.status}）` : reason instanceof Error ? reason.message : String(reason));
-      }
-    } finally {
-      if (!signal?.aborted) setReadinessLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    getHealth(controller.signal).then((r) => r.ok && setHealth(r.data)).catch(() => undefined);
-    void probeReadiness(controller.signal);
-    const readinessTimer = window.setInterval(() => void probeReadiness(controller.signal), 30_000);
-    authenticate().then(setAuth).catch((e) => setError(e instanceof ApiError ? `[${e.code}] ${e.message}` : e instanceof Error ? e.message : "Telegram 登录失败")).finally(() => setLoading(false));
-    return () => { window.clearInterval(readinessTimer); controller.abort(); };
-  }, [probeReadiness]);
+  useEffect(() => { const controller = new AbortController(); getHealth(controller.signal).then((r) => r.ok && setHealth(r.data)).catch(() => undefined); getReadiness(controller.signal).then(setReadiness).catch(() => setReadiness(null)); authenticate().then(setAuth).catch((e) => setError(e instanceof ApiError ? `[${e.code}] ${e.message}` : e instanceof Error ? e.message : "Telegram 登录失败")).finally(() => setLoading(false)); return () => controller.abort(); }, []);
   useEffect(() => { if (auth) void loadData(); }, [auth]);
   useEffect(() => {
     document.documentElement.classList.toggle("mobile-drawer-open", mobileOpen);
@@ -107,38 +82,19 @@ function App() {
       <div className="sidebar-footer"><div className="operator-card"><div className="operator-avatar">{auth.user.displayName.slice(0, 1)}</div><div><strong>{auth.user.displayName}</strong><span>已认证 · {auth.role}</span></div></div><button className="nav-item muted" onClick={() => { void logout().finally(() => window.location.reload()); }}><LogOut size={17} /><span>退出登录</span></button></div>
     </aside>
     {mobileOpen && <button className="mobile-backdrop" onClick={() => setMobileOpen(false)} aria-label="关闭导航" />}
-      <main className="main-content"><header className="topbar"><button className="icon-button mobile-menu" onClick={() => setMobileOpen(true)}><Menu size={20} /></button><div className="breadcrumb"><span>运营工作台</span><ChevronRight size={15} /><strong>{current.label}</strong></div><div className="topbar-actions"><div className="connection-pill"><span className={`status-dot ${readiness?.ready ? "online" : ""}`} />{readiness?.ready ? "基础依赖可用" : readiness ? "基础依赖异常" : readinessError ? "探测失败" : "基础依赖检查中"}</div><div className="profile-chip">{auth.user.displayName.slice(0, 1)}</div></div></header>
-      <div className="content-wrap"><section className="page-heading"><div><div className="eyebrow">{auth.workspace.name} · 运营工作台</div><h1>{current.label}</h1><p>{pageSubtitle(page)}</p></div><button className="secondary-button toolbar-action-button" onClick={() => void loadData()} disabled={refreshing}><RefreshCw size={15} className={refreshing ? "spin" : ""} />刷新数据</button></section>{error && <div className="error-banner">{error}</div>}{loadDiagnostics.length > 0 && <div className="error-banner"><strong>接口诊断：</strong>{loadDiagnostics.map((item) => <div key={item}>{item}</div>)}</div>}{page === "overview" ? <Overview data={data} health={health} readiness={readiness} readinessError={readinessError} readinessLoading={readinessLoading} onRetryReadiness={() => { void probeReadiness(); }} onNavigate={choose} /> : <PageContent page={page} data={data} auth={auth} onRefresh={loadData} />}</div>
+      <main className="main-content"><header className="topbar"><button className="icon-button mobile-menu" onClick={() => setMobileOpen(true)}><Menu size={20} /></button><div className="breadcrumb"><span>运营工作台</span><ChevronRight size={15} /><strong>{current.label}</strong></div><div className="topbar-actions"><div className="connection-pill"><span className={`status-dot ${readiness?.ready ? "online" : ""}`} />{readiness?.ready ? "基础依赖可用" : readiness ? "基础依赖异常" : "基础依赖检查中"}</div><div className="profile-chip">{auth.user.displayName.slice(0, 1)}</div></div></header>
+      <div className="content-wrap"><section className="page-heading"><div><div className="eyebrow">{auth.workspace.name} · 运营工作台</div><h1>{current.label}</h1><p>{pageSubtitle(page)}</p></div><button className="secondary-button toolbar-action-button" onClick={() => void loadData()} disabled={refreshing}><RefreshCw size={15} className={refreshing ? "spin" : ""} />刷新数据</button></section>{error && <div className="error-banner">{error}</div>}{loadDiagnostics.length > 0 && <div className="error-banner"><strong>接口诊断：</strong>{loadDiagnostics.map((item) => <div key={item}>{item}</div>)}</div>}{page === "overview" ? <Overview data={data} health={health} readiness={readiness} onNavigate={choose} /> : <PageContent page={page} data={data} auth={auth} onRefresh={loadData} />}</div>
     </main>
   </div>;
 }
 
 function pageSubtitle(page: Page) { return ({ overview: "查看真实业务指标、待办事项和系统运行状态", channels: "绑定频道并检查发布权限", customers: "管理广告主、联系人和合作记录", packages: "配置可售广告位和发布规则", orders: "跟踪订单状态、金额和履约进度", schedules: "管理发布排期和任务状态", media: "查看 Telegram Webhook 收集的真实素材", finance: "审核付款并推进订单履约", settings: "配置 Telegram 运维告警接收目标", publishes: "监控发布队列、重试和失败任务", members: "管理成员角色、状态和最近登录", audit: "查询关键业务操作及前后状态" } as Record<Page, string>)[page]; }
-function Overview({ data, health, readiness, readinessError, readinessLoading, onRetryReadiness, onNavigate }: { data: DataState; health: HealthPayload | null; readiness: HealthReadiness | null; readinessError: string; readinessLoading: boolean; onRetryReadiness: () => void; onNavigate: (page: Page) => void }) {
-  const revenue = currencyTotals(data.orders);
-  const pending = data.orders.filter((o) => ["draft", "pending_payment", "pending_review", "approved", "scheduled"].includes(o.status)).length;
-  const readinessText = readiness?.blocking.length
-    ? `阻塞项：${readiness.blocking.map((item) => readinessBlockerText[item] ?? item).join("、")}`
-    : readiness?.ready
-      ? "已探测 D1 可查询，并检查 Telegram Token 与 R2 binding 存在；不代表 Telegram 实际发送、R2 读写或生产恢复演练已验收。"
-      : readinessError
-        ? `探测失败：${readinessError}。当前状态未知，请重试；不要据此判断生产依赖不可用。`
-        : "尚未取得 readiness 探测结果；不要据此判断生产链路已验收。";
-  return <>
-    <div className={`status-banner ${readinessError || (readiness && !readiness.ready) ? "status-warning" : ""}`}>
-      <div className="status-icon"><ShieldCheck size={19} /></div>
-      <div className="status-message">
-        <strong>{readiness?.ready ? "基础依赖检查通过" : readiness ? "基础依赖检查未通过" : readinessError ? "无法取得基础依赖检查结果" : "正在检查基础依赖"}</strong>
-        <span>{readinessText}</span>
-        {readinessError && <button className="secondary-button small" onClick={onRetryReadiness} disabled={readinessLoading}>{readinessLoading ? "重试中…" : "重试检查"}</button>}
-      </div>
-      <span className="live-chip">{readiness?.ready ? "READY" : readiness ? "BLOCKED" : readinessError ? "ERROR" : "CHECK"}</span>
-    </div>
-    <section className="metric-grid"><Metric label="活跃频道" value={String(data.channels.filter((c) => c.status === "active").length)} hint={`${data.channels.length} 个已绑定`} icon={Radio} onClick={() => onNavigate("channels")} /><Metric label="客户总数" value={String(data.customers.length)} hint="真实 CRM 数据" icon={Users} onClick={() => onNavigate("customers")} /><Metric label="待处理订单" value={String(pending)} hint={`${data.orders.length} 笔订单`} icon={Megaphone} onClick={() => onNavigate("orders")} /><Metric label="订单总额" value={revenue} hint="按币种/资产分别合计" icon={CircleDollarSign} onClick={() => onNavigate("orders")} /></section>
-    <section className="dashboard-grid"><article className="panel"><PanelTitle title="订单履约" kicker="REAL-TIME" /><div className="progress-list"><Progress label="已发布" value={data.orders.filter((o) => o.status === "published").length} total={Math.max(data.orders.length, 1)} tone="green" /><Progress label="待付款 / 审核" value={data.orders.filter((o) => ["pending_payment", "pending_review"].includes(o.status)).length} total={Math.max(data.orders.length, 1)} tone="orange" /><Progress label="排期中" value={data.orders.filter((o) => ["approved", "scheduled", "publishing"].includes(o.status)).length} total={Math.max(data.orders.length, 1)} tone="blue" /></div><button className="link-button" onClick={() => onNavigate("orders")}>查看全部订单 <ChevronRight size={15} /></button></article><article className="panel"><PanelTitle title="系统状态" kicker="PRODUCTION" /><div className="runtime-list"><Runtime label="API readiness" value={readiness?.ready ? "就绪" : readiness ? "阻塞" : readinessError ? "探测失败" : "检查中"} good={Boolean(readiness?.ready)} /><Runtime label="Telegram Bot Token" value={health?.dependencies.telegram === "configured" ? "已配置" : "未配置"} good={health?.dependencies.telegram === "configured"} /><Runtime label="数据库探测" value={!readiness ? readinessError ? "结果未知" : "检查中" : readiness.blocking.includes("database") ? "不可用" : "可连接"} good={Boolean(readiness && !readiness.blocking.includes("database"))} /><Runtime label="自动发布队列" value={`${data.tasks.length} 个任务`} /></div></article></section>
-    <section className="panel table-panel"><PanelTitle title="最近订单" kicker="WORKSPACE ACTIVITY" action={<button className="secondary-button small" onClick={() => onNavigate("orders")}>管理订单</button>} />{data.orders.length ? <OrderTable orders={data.orders.slice(0, 5)} /> : <Empty title="还没有订单" text="先绑定频道、创建客户和广告套餐，即可创建第一笔真实订单。" action="去绑定频道" onClick={() => onNavigate("channels")} />}</section>
-  </>;
-}
+function Overview({ data, health, readiness, onNavigate }: { data: DataState; health: HealthPayload | null; readiness: HealthReadiness | null; onNavigate: (page: Page) => void }) { const revenue = currencyTotals(data.orders); const pending = data.orders.filter((o) => ["draft", "pending_payment", "pending_review", "approved", "scheduled"].includes(o.status)).length; return <>
+  <div className="status-banner"><div className="status-icon"><ShieldCheck size={19} /></div><div className="status-message"><strong>{readiness?.ready ? "基础依赖检查通过" : readiness ? "基础依赖检查未通过" : "正在检查基础依赖"}</strong><span>{readiness?.blocking.length ? `阻塞项：${readiness.blocking.map((item) => readinessBlockerText[item] ?? item).join("、")}` : readiness?.ready ? "已探测 D1 可查询，并检查 Telegram Token 与 R2 binding 存在；不代表 Telegram 实际发送、R2 读写或生产恢复演练已验收。" : "尚未取得 readiness 探测结果；不要据此判断生产链路已验收。"}</span></div><span className="live-chip">{readiness?.ready ? "READY" : "CHECK"}</span></div>
+  <section className="metric-grid"><Metric label="活跃频道" value={String(data.channels.filter((c) => c.status === "active").length)} hint={`${data.channels.length} 个已绑定`} icon={Radio} onClick={() => onNavigate("channels")} /><Metric label="客户总数" value={String(data.customers.length)} hint="真实 CRM 数据" icon={Users} onClick={() => onNavigate("customers")} /><Metric label="待处理订单" value={String(pending)} hint={`${data.orders.length} 笔订单`} icon={Megaphone} onClick={() => onNavigate("orders")} /><Metric label="订单总额" value={revenue} hint="按币种/资产分别合计" icon={CircleDollarSign} onClick={() => onNavigate("orders")} /></section>
+  <section className="dashboard-grid"><article className="panel"><PanelTitle title="订单履约" kicker="REAL-TIME" /><div className="progress-list"><Progress label="已发布" value={data.orders.filter((o) => o.status === "published").length} total={Math.max(data.orders.length, 1)} tone="green" /><Progress label="待付款 / 审核" value={data.orders.filter((o) => ["pending_payment", "pending_review"].includes(o.status)).length} total={Math.max(data.orders.length, 1)} tone="orange" /><Progress label="排期中" value={data.orders.filter((o) => ["approved", "scheduled", "publishing"].includes(o.status)).length} total={Math.max(data.orders.length, 1)} tone="blue" /></div><button className="link-button" onClick={() => onNavigate("orders")}>查看全部订单 <ChevronRight size={15} /></button></article><article className="panel"><PanelTitle title="系统状态" kicker="PRODUCTION" /><div className="runtime-list"><Runtime label="API readiness" value={readiness?.ready ? "就绪" : readiness ? "阻塞" : "检查中"} good={Boolean(readiness?.ready)} /><Runtime label="Telegram Bot Token" value={health?.dependencies.telegram === "configured" ? "已配置" : "未配置"} good={health?.dependencies.telegram === "configured"} /><Runtime label="数据库探测" value={!readiness ? "检查中" : readiness.blocking.includes("database") ? "不可用" : "可连接"} good={Boolean(readiness && !readiness.blocking.includes("database"))} /><Runtime label="自动发布队列" value={`${data.tasks.length} 个任务`} /></div></article></section>
+  <section className="panel table-panel"><PanelTitle title="最近订单" kicker="WORKSPACE ACTIVITY" action={<button className="secondary-button small" onClick={() => onNavigate("orders")}>管理订单</button>} />{data.orders.length ? <OrderTable orders={data.orders.slice(0, 5)} /> : <Empty title="还没有订单" text="先绑定频道、创建客户和广告套餐，即可创建第一笔真实订单。" action="去绑定频道" onClick={() => onNavigate("channels")} />}</section>
+</>; }
 function Metric({ label, value, hint, icon: Icon, onClick }: { label: string; value: string; hint: string; icon: typeof Radio; onClick: () => void }) { return <button className="metric-card" onClick={onClick}><div className="metric-icon"><Icon size={18} /></div><div className="metric-label">{label}</div><div className="metric-value">{value}</div><div className="metric-hint">{hint}</div></button>; }
 function PanelTitle({ title, kicker, action }: { title: string; kicker: string; action?: ReactNode }) { return <div className="panel-heading"><div><div className="panel-kicker">{kicker}</div><h2>{title}</h2></div>{action}</div>; }
 function Progress({ label, value, total, tone }: { label: string; value: number; total: number; tone: string }) { const percent = Math.min(100, Math.round(value / total * 100)); return <div className="progress-row"><div><span>{label}</span><strong>{value}</strong></div><div className="progress-track"><span className={`progress-fill ${tone}`} style={{ width: `${percent}%` }} /></div></div>; }
