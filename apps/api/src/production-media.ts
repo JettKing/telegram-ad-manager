@@ -1,13 +1,13 @@
 import type { D1Like } from "@tg-ad-manager/telegram";
 import { BusinessValidationError } from "./business.js";
-import { parseTelegramMediaUpdate, transitionMediaGroup, type MediaGroupState, type MediaIngestResult, type ParsedMediaMessage } from "./media.js";
+import { parseTelegramMediaUpdate, resolveTelegramMediaScope, transitionMediaGroup, type MediaGroupState, type MediaIngestResult, type ParsedMediaMessage } from "./media.js";
 
 interface AssetRow { id: string; media_type: "photo" | "video" | "animation" | "document"; file_id?: string; file_unique_id?: string; file_name?: string; mime_type?: string; file_size?: number; width?: number; height?: number; duration_seconds?: number; caption?: string; media_group_id?: string; review_status?: string; review_note?: string; reviewed_at?: string; created_at: string }
 interface ScopeRow { tenantId: string; workspaceId: string }
 interface GroupRow { id: string; tenant_id: string; workspace_id: string; state: MediaGroupState; version: number }
 
 function supportedMedia(media: ParsedMediaMessage): media is ParsedMediaMessage & { fileId: string } {
-  return media.mediaType !== "text" && typeof media.fileId === "string" && media.fileId.length > 0;
+  return media.mediaType !== "text" && media.mediaType !== "unsupported" && !media.incomplete && typeof media.fileId === "string" && media.fileId.length > 0;
 }
 
 export class ProductionMediaRepository {
@@ -37,19 +37,6 @@ export class ProductionMediaRepository {
     return (result.meta?.changes ?? 0) > 0;
   }
 
-  private async resolveScope(botIdentityId: string, sourceChatId: string, fromTelegramUserId?: string): Promise<ScopeRow | null> {
-    if (fromTelegramUserId) {
-      const userScope = await this.db.prepare(`SELECT tm.tenant_id AS tenantId, wm.workspace_id AS workspaceId
-        FROM users u JOIN tenant_members tm ON tm.user_id = u.id AND tm.status = 'active'
-        JOIN workspace_members wm ON wm.user_id = u.id AND wm.tenant_id = tm.tenant_id
-        JOIN workspaces w ON w.id = wm.workspace_id AND w.tenant_id = tm.tenant_id AND w.status = 'active'
-        WHERE u.telegram_user_id = ? AND u.is_active = 1 ORDER BY tm.created_at, wm.created_at LIMIT 1`).bind(fromTelegramUserId).first<ScopeRow>();
-      if (userScope) return userScope;
-    }
-    return this.db.prepare(`SELECT tenant_id AS tenantId, workspace_id AS workspaceId FROM telegram_channels
-      WHERE bot_identity_id = ? AND telegram_chat_id = ? AND status != 'unbound' LIMIT 1`).bind(botIdentityId, sourceChatId).first<ScopeRow>();
-  }
-
   private async upsertAsset(scope: ScopeRow, botIdentityId: string, media: ParsedMediaMessage, now: string): Promise<string> {
     if (!supportedMedia(media)) throw new BusinessValidationError("MEDIA_UNSUPPORTED", "生产媒体入库目前只接受带 file_id 的 Telegram 媒体消息");
     const existing = await this.db.prepare("SELECT id, tenant_id, workspace_id FROM creative_media WHERE bot_identity_id = ? AND source_chat_id = ? AND telegram_message_id = ? LIMIT 1").bind(botIdentityId, media.sourceChatId, media.messageId).first<{ id: string; tenant_id: string; workspace_id: string }>();
@@ -64,7 +51,7 @@ export class ProductionMediaRepository {
       await this.db.prepare(`INSERT INTO creative_media (id, tenant_id, workspace_id, creative_id, bot_identity_id, media_type, file_id, file_unique_id, file_name, mime_type, file_size, width, height, duration_seconds, media_group_id, caption, sort_order, telegram_message_id, source_chat_id, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`).bind(candidateId, scope.tenantId, scope.workspaceId, candidateId, botIdentityId, media.mediaType, media.fileId, media.fileUniqueId ?? null, media.fileName ?? null, media.mimeType ?? null, media.fileSize ?? null, media.width ?? null, media.height ?? null, media.durationSeconds ?? null, media.mediaGroupId ?? null, media.caption ?? null, media.messageId, media.sourceChatId, now, now).run();
     }
-    const stored = await this.db.prepare("SELECT id FROM creative_media WHERE bot_identity_id = ? AND source_chat_id = ? AND telegram_message_id = ? LIMIT 1").bind(botIdentityId, media.sourceChatId, media.messageId).first<{ id: string }>();
+    const stored = await this.db.prepare("SELECT id FROM creative_media WHERE bot_identity_id = ? AND source_chat_id = ? AND telegram_message_id = ? AND tenant_id = ? AND workspace_id = ? LIMIT 1").bind(botIdentityId, media.sourceChatId, media.messageId, scope.tenantId, scope.workspaceId).first<{ id: string }>();
     if (!stored) throw new Error("MEDIA_ASSET_UPSERT_FAILED");
     return stored.id;
   }
@@ -92,7 +79,11 @@ export class ProductionMediaRepository {
     if (!media) return { handled: false, reason: "unsupported_update" };
     if (media.sourceKind !== "private") return { handled: false, reason: "unsupported_update" };
     if (media.mediaType === "text") return { handled: false, reason: "unsupported_update" };
-    const scope = await this.resolveScope(botIdentityId, media.sourceChatId, media.fromTelegramUserId);
+    if (media.mediaType === "unsupported") return { handled: false, reason: "unsupported_media", mediaType: media.mediaType, unsupportedMediaType: media.unsupportedMediaType, telegramMediaGroupId: media.mediaGroupId };
+    if (media.incomplete || !media.fileId) return { handled: false, reason: "incomplete_media", mediaType: media.mediaType, telegramMediaGroupId: media.mediaGroupId };
+    const resolution = await resolveTelegramMediaScope(this.db, botIdentityId, media.sourceChatId, media.fromTelegramUserId);
+    if (resolution.ambiguous) return { handled: false, reason: "scope_ambiguous" };
+    const scope = resolution.scope;
     if (!scope) return { handled: false, reason: "scope_not_found" };
     const assetId = await this.upsertAsset(scope, botIdentityId, media, now);
     if (!media.mediaGroupId) return { handled: true, reason: "stored", assetId };

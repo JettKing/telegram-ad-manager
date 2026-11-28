@@ -5,6 +5,7 @@ import type { D1Like } from "@tg-ad-manager/telegram";
 const scope = { tenantId: "tenant-1", workspaceId: "workspace-1" };
 function mockDb(current: { role: string; status: string }, anotherOwner: { user_id: string } | null = null, changes = 1, latest = current) {
   const queries: string[] = [];
+  const batches: unknown[][] = [];
   let memberReads = 0;
   const db = {
     prepare(query: string) {
@@ -23,8 +24,9 @@ function mockDb(current: { role: string; status: string }, anotherOwner: { user_
         },
       };
     },
+    async batch(statements: unknown[]) { batches.push(statements); return statements.map(() => ({ meta: { changes } })); },
   };
-  return { db: db as unknown as D1Like, queries };
+  return { db: db as unknown as D1Like, queries, batches };
 }
 
 describe("production member governance", () => {
@@ -48,16 +50,27 @@ describe("production member governance", () => {
   });
 
   it("allows an owner to suspend one of multiple active owners", async () => {
-    const { db, queries } = mockDb({ role: "owner", status: "active" }, { user_id: "owner-2" });
+    const { db, queries, batches } = mockDb({ role: "owner", status: "active" }, { user_id: "owner-2" });
     const result = await new ProductionAdminRepository(db).updateMember(scope, "owner-2", "owner", "owner-1", undefined, "suspended", "2026-11-27T00:00:00.000Z");
     expect(result.after).toEqual({ role: "owner", status: "suspended" });
     expect(queries.some((query) => query.includes("other.user_id <> workspace_members.user_id"))).toBe(true);
+    expect(batches).toHaveLength(1);
+    expect(queries.some((query) => query.includes("UPDATE user_sessions SET revoked_at") && query.includes("wm.status = 'suspended'"))).toBe(true);
   });
 
   it("does not remove a member promoted to owner concurrently", async () => {
-    const { db, queries } = mockDb({ role: "manager", status: "active" }, null, 0, { role: "owner", status: "active" });
+    const { db, queries, batches } = mockDb({ role: "manager", status: "active" }, null, 0, { role: "owner", status: "active" });
     await expect(new ProductionAdminRepository(db).removeMember(scope, "member-1", "2026-11-27T00:00:00.000Z"))
       .rejects.toMatchObject({ code: "OWNER_MEMBER_PROTECTED" });
+    expect(batches).toHaveLength(1);
     expect(queries.some((query) => query.includes("status <> 'suspended'") && query.includes("role <> 'owner'"))).toBe(true);
+  });
+
+  it("atomically revokes sessions when removing a member", async () => {
+    const { db, queries, batches } = mockDb({ role: "manager", status: "active" });
+    const result = await new ProductionAdminRepository(db).removeMember(scope, "member-1", "2026-11-27T00:00:00.000Z");
+    expect(result.removed).toBe(true);
+    expect(batches).toHaveLength(1);
+    expect(queries.some((query) => query.includes("UPDATE user_sessions SET revoked_at") && query.includes("wm.status = 'suspended'"))).toBe(true);
   });
 });

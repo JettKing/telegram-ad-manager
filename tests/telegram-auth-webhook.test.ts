@@ -169,7 +169,7 @@ describe("Telegram Webhook", () => {
   it("allows the configured Mini App origin to read the readiness probe", async () => {
     const db = { prepare: () => ({ bind: () => ({ first: async () => ({ ready: 1 }) }) }) } as never;
     const origin = "https://telegram-ad-manager.pages.dev";
-    const env = { DB: db, TELEGRAM_BOT_TOKEN: "test-token", R2_BUCKET: { put: async () => undefined }, WEB_APP_ORIGIN: origin };
+    const env = { DB: db, D1_SCHEMA_CONTRACT: "production-0009", TELEGRAM_BOT_TOKEN: "test-token", TELEGRAM_WEBHOOK_SECRET: "webhook-secret", TELEGRAM_BOT_IDENTITY_ID: "bot-1", SESSION_SECRET: "session-secret", R2_BUCKET: { put: async () => undefined, get: async () => null, delete: async () => undefined }, WEB_APP_ORIGIN: origin };
     const response = await app.request("/health/ready", { headers: { Origin: origin } }, env as never);
     expect(response.status).toBe(200);
     expect(response.headers.get("Access-Control-Allow-Origin")).toBe(origin);
@@ -180,13 +180,26 @@ describe("Telegram Webhook", () => {
 
   it("marks readiness blocked when the required R2 proof bucket is missing", async () => {
     const db = { prepare: () => ({ bind: () => ({ first: async () => ({ ready: 1 }) }) }) } as never;
-    const baseEnv = { DB: db, TELEGRAM_BOT_TOKEN: "test-token" };
+    const baseEnv = { DB: db, D1_SCHEMA_CONTRACT: "production-0009", TELEGRAM_BOT_TOKEN: "test-token", TELEGRAM_WEBHOOK_SECRET: "webhook-secret", TELEGRAM_BOT_IDENTITY_ID: "bot-1", SESSION_SECRET: "session-secret", WEB_APP_ORIGIN: "https://telegram-ad-manager.pages.dev" };
     const blocked = await app.request("/health/ready", {}, baseEnv as never);
     expect(blocked.status).toBe(503);
     expect((await blocked.json()).blocking).toContain("r2");
 
-    const ready = await app.request("/health/ready", {}, { ...baseEnv, R2_BUCKET: { put: async () => undefined } } as never);
+    const ready = await app.request("/health/ready", {}, { ...baseEnv, R2_BUCKET: { put: async () => undefined, get: async () => null, delete: async () => undefined } } as never);
     expect(ready.status).toBe(200);
     expect((await ready.json()).ready).toBe(true);
+  });
+
+  it("reports missing session, origin, webhook, bot identity and production schema readiness dependencies", async () => {
+    const db = { prepare: () => ({ bind: () => ({ first: async () => ({ ready: 1 }) }) }) } as never;
+    const response = await app.request("/health/ready", {}, { DB: db, TELEGRAM_BOT_TOKEN: "test-token", R2_BUCKET: { put: async () => undefined, get: async () => null, delete: async () => undefined } } as never);
+    expect(response.status).toBe(503);
+    expect((await response.json()).blocking).toEqual(expect.arrayContaining(["session_secret", "web_app_origin", "telegram_webhook_secret", "telegram_bot_identity", "database_schema"]));
+  });
+
+  it("fails closed instead of using in-memory deduplication in production when webhook persistence is missing", async () => {
+    const response = await app.request("/webhooks/telegram", { method: "POST", headers: { "content-type": "application/json", "X-Telegram-Bot-Api-Secret-Token": "expected" }, body: JSON.stringify({ update_id: 99002 }) }, { ENVIRONMENT: "production", TELEGRAM_WEBHOOK_SECRET: "expected" } as never);
+    expect(response.status).toBe(503);
+    expect((await response.json()).error.code).toBe("WEBHOOK_PERSISTENCE_NOT_CONFIGURED");
   });
 });

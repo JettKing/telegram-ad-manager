@@ -1,6 +1,6 @@
 import type { D1Like } from "@tg-ad-manager/telegram";
 import { BusinessValidationError, type OrderStatus } from "./business.js";
-import { assertPaymentMethod, type PaymentInput, type PaymentReviewInput, type RefundInput, type RefundReviewInput } from "./payments.js";
+import { assertPaymentMethod, assertRefundMethod, type PaymentInput, type PaymentReviewInput, type RefundInput, type RefundReviewInput } from "./payments.js";
 
 interface OrderPaymentContext { id: string; receivable_minor: number; currency: string; currency_scale: number; network?: string | null; payment_status: string; status: OrderStatus; customer_id: string }
 interface PaymentRow { id: string; order_id: string; method: string; amount_minor: number; currency?: string; amount_scale?: number; network?: string | null; transaction_ref?: string; proof_asset_id?: string; paid_at?: string; status: "pending_review" | "approved" | "rejected"; reviewed_by?: string; reviewed_at?: string; review_note?: string; created_at: string }
@@ -10,8 +10,8 @@ interface BatchResult { meta?: { changes?: number } }
 
 async function all<T>(db: D1Like, query: string, ...values: unknown[]): Promise<T[]> { const prepared = db.prepare(query).bind(...values); return prepared.all ? (await prepared.all<T>()).results : []; }
 function refundDisbursementMethod(value: string): string {
-  const allowed = ["bank_transfer", "alipay", "wechat", "cash", "crypto", "other"];
-  if (!allowed.includes(value)) throw new BusinessValidationError("INVALID_REFUND_DISBURSEMENT_METHOD", "退款出款方式无效");
+  const allowed = ["alipay", "wechat", "crypto"];
+  if (!allowed.includes(value)) throw new BusinessValidationError("INVALID_REFUND_DISBURSEMENT_METHOD", "退款出款方式仅支持支付宝、微信或数字货币");
   return value;
 }
 
@@ -147,6 +147,7 @@ export class ProductionPaymentRepository {
   }
 
   async createRefund(scope: { tenantId: string; workspaceId: string }, actorUserId: string, orderId: string, input: RefundInput, now: string): Promise<string> {
+    if (input.method) assertRefundMethod(input.method);
     const idempotencyKey = input.idempotencyKey?.trim();
     if (!idempotencyKey) throw new BusinessValidationError("IDEMPOTENCY_KEY_REQUIRED", "退款请求必须包含幂等键");
     const existing = await this.db.prepare("SELECT id, order_id, amount_minor, reason, method, transaction_ref FROM ad_order_refunds WHERE tenant_id = ? AND workspace_id = ? AND idempotency_key = ? LIMIT 1").bind(scope.tenantId, scope.workspaceId, idempotencyKey).first<{ id: string; order_id: string; amount_minor: number; reason: string; method?: string; transaction_ref?: string }>();
@@ -199,9 +200,9 @@ export class ProductionPaymentRepository {
     return { orderId: refund.order_id, status };
   }
 
-  async disburseRefund(scope: { tenantId: string; workspaceId: string }, actorUserId: string, refundId: string, input: { method?: string; transactionRef?: string; actualAmountMinor: number }, now: string): Promise<{ orderId: string; status: string }> {
-    const method = refundDisbursementMethod(input.method ?? "bank_transfer");
-    if (["bank_transfer", "alipay", "wechat", "crypto"].includes(method) && !input.transactionRef?.trim()) throw new BusinessValidationError("REFUND_DISBURSEMENT_REF_REQUIRED", "银行或电子支付实际出款必须填写转账流水号");
+  async disburseRefund(scope: { tenantId: string; workspaceId: string }, actorUserId: string, refundId: string, input: { method: string; transactionRef?: string; actualAmountMinor: number }, now: string): Promise<{ orderId: string; status: string }> {
+    const method = refundDisbursementMethod(input.method);
+    if (!input.transactionRef?.trim()) throw new BusinessValidationError("REFUND_DISBURSEMENT_REF_REQUIRED", "实际退款出款必须填写交易流水号或链上交易哈希");
     const refund = await this.db.prepare("SELECT id, order_id, amount_minor, currency, amount_scale, network, status, disbursed_at, disbursement_legacy_inferred FROM ad_order_refunds WHERE id = ? AND tenant_id = ? AND workspace_id = ? LIMIT 1").bind(refundId, scope.tenantId, scope.workspaceId).first<RefundRow>();
     if (!refund) throw new BusinessValidationError("REFUND_NOT_FOUND", "退款申请不存在或不属于当前工作空间");
     if (refund.disbursement_legacy_inferred === 1) throw new BusinessValidationError("REFUND_LEGACY_RECONCILIATION_REQUIRED", "这是迁移前的历史退款，必须先人工核对银行流水，不能直接登记或重复出款");

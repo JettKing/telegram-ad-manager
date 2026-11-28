@@ -57,6 +57,7 @@ export function parseScheduleInput(value: unknown, now = new Date()): ScheduleIn
   if (!Number.isFinite(plannedTime) || plannedTime < now.getTime() - 60_000) throw new BusinessValidationError("INVALID_PLANNED_AT", "计划发布时间必须是有效且未过期的时间");
   const plannedEndAt = input?.plannedEndAt === undefined ? undefined : requiredString(input.plannedEndAt, "plannedEndAt", 80);
   if (plannedEndAt && Date.parse(plannedEndAt) <= plannedTime) throw new BusinessValidationError("INVALID_PLANNED_END_AT", "到期时间必须晚于计划发布时间");
+  if (scheduleType !== "once" || input?.repeatUntil !== undefined || input?.intervalMinutes !== undefined || input?.occurrenceLimit !== undefined) throw new BusinessValidationError("UNSUPPORTED_REPEAT_SCHEDULE", "当前发布队列只支持单次排期；重复规则尚未实现实例展开");
   return { scheduleType, plannedAt: new Date(plannedTime).toISOString(), plannedEndAt: plannedEndAt ? new Date(Date.parse(plannedEndAt)).toISOString() : undefined };
 }
 
@@ -102,6 +103,7 @@ export class D1PublishRepository {
   }
 
   async createSchedule(scope: { tenantId: string; workspaceId: string }, actorUserId: string, orderId: string, input: ScheduleInput, now: string): Promise<{ scheduleId: string; taskId: string }> {
+    if (input.scheduleType !== "once") throw new BusinessValidationError("UNSUPPORTED_REPEAT_SCHEDULE", "当前发布队列只支持单次排期；重复规则尚未实现实例展开");
     const order = await this.order(scope, orderId);
     if (order.status !== "approved") throw new BusinessValidationError("ORDER_NOT_APPROVED", "只有 approved 订单可以进入排期");
     const channel = await this.db.prepare("SELECT id FROM telegram_channels WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status = 'active' AND can_post = 1 LIMIT 1").bind(order.channel_id, scope.tenantId, scope.workspaceId).first<{ id: string }>();

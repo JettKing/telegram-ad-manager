@@ -96,7 +96,7 @@ async function main() {
     const unmatched = database.prepare("SELECT disbursement_legacy_inferred, disbursed_at FROM ad_order_refunds WHERE id = 'legacy-unmatched'").get() as Record<string, unknown>;
     assert.deepEqual({ ...unmatched }, { disbursement_legacy_inferred: 1, disbursed_at: null });
     const repo = new ProductionPaymentRepository(new SqliteD1(database) as unknown as D1Like);
-    await assert.rejects(() => repo.disburseRefund(scope, 'finance-1', 'legacy-unmatched', { method: 'bank_transfer', transactionRef: 'DO-NOT-DUPLICATE', actualAmountMinor: 1 }, now), { code: 'REFUND_LEGACY_RECONCILIATION_REQUIRED' });
+    await assert.rejects(() => repo.disburseRefund(scope, 'finance-1', 'legacy-unmatched', { method: 'alipay', transactionRef: 'DO-NOT-DUPLICATE', actualAmountMinor: 1 }, now), { code: 'REFUND_LEGACY_RECONCILIATION_REQUIRED' });
     database.exec("INSERT INTO ad_order_refunds (id, tenant_id, workspace_id, order_id, amount_minor, reason, status, idempotency_key, created_at, updated_at) VALUES ('first-key', 'tenant-1', 'workspace-1', 'order-1', 1, 'first', 'pending_review', 'same-key', 'now', 'now')");
     assert.throws(() => database.exec("INSERT INTO ad_order_refunds (id, tenant_id, workspace_id, order_id, amount_minor, reason, status, idempotency_key, created_at, updated_at) VALUES ('duplicate-key', 'tenant-1', 'workspace-1', 'order-1', 1, 'second', 'pending_review', 'same-key', 'now', 'now')"));
     database.close();
@@ -105,7 +105,7 @@ async function main() {
   {
     const { database, db } = sqliteFixture();
     const repo = new ProductionPaymentRepository(db);
-    const input = { idempotencyKey: "refund-request-1", amountMinor: 5000, reason: "campaign cancelled", method: "bank_transfer" };
+    const input = { idempotencyKey: "refund-request-1", amountMinor: 5000, reason: "campaign cancelled", method: "alipay" };
     const id = await repo.createRefund(scope, "finance-1", "order-1", input, now);
     assert.equal(await repo.createRefund(scope, "finance-1", "order-1", input, now), id);
     assert.equal((database.prepare("SELECT payment_submission_id FROM ad_order_refunds WHERE id = ?").get(id) as { payment_submission_id: string }).payment_submission_id, "payment-1");
@@ -124,8 +124,8 @@ async function main() {
     await assert.rejects(() => repo.createPayment(scope, "finance-1", "order-payment", { ...paymentInput, amountMinor: 3000 }, now), { code: "IDEMPOTENCY_KEY_CONFLICT" });
     const refundId = await repo.createRefund(scope, "finance-1", "order-1", { idempotencyKey: "refund-disburse-1", amountMinor: 5000, reason: "approved refund" }, now);
     database.prepare("UPDATE ad_order_refunds SET status = 'approved' WHERE id = ?").run(refundId);
-    await assert.rejects(() => repo.disburseRefund(scope, "finance-1", refundId, { method: "bank_transfer", actualAmountMinor: 5000 }, now), { code: "REFUND_DISBURSEMENT_REF_REQUIRED" });
-    await repo.disburseRefund(scope, "finance-1", refundId, { method: "bank_transfer", transactionRef: "RF-LIVE-1", actualAmountMinor: 5000 }, now);
+    await assert.rejects(() => repo.disburseRefund(scope, "finance-1", refundId, { method: "alipay", actualAmountMinor: 5000 }, now), { code: "REFUND_DISBURSEMENT_REF_REQUIRED" });
+    await repo.disburseRefund(scope, "finance-1", refundId, { method: "alipay", transactionRef: "RF-LIVE-1", actualAmountMinor: 5000 }, now);
     const disbursed = database.prepare("SELECT disbursed_by, disbursed_at, disbursement_transaction_ref FROM ad_order_refunds WHERE id = ?").get(refundId) as Record<string, unknown>;
     assert.equal(disbursed.disbursed_by, "finance-1");
     assert.equal(disbursed.disbursed_at, now);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseProductionScheduleInput, processProductionDuePublishTasks, ProductionPublishRepository } from "../apps/api/src/production-publishing";
+import { parseScheduleInput } from "../apps/api/src/publishing";
 
 describe("production schema publish adapter", () => {
   it("requires the production end_at field and normalizes the timezone contract", () => {
@@ -8,8 +9,17 @@ describe("production schema publish adapter", () => {
     expect(() => parseProductionScheduleInput({ scheduleType: "once", startAt: "2026-11-17T01:00:00Z" }, now)).toThrow("endAt");
   });
 
-  it("accepts the legacy API field names only as an explicit adapter input", () => {
-    expect(parseProductionScheduleInput({ scheduleType: "daily", plannedAt: "2026-11-17T01:00:00Z", plannedEndAt: "2026-11-17T02:00:00Z", timezone: "UTC", intervalMinutes: 1440 }, new Date("2026-11-17T00:00:00Z"))).toMatchObject({ timezone: "UTC", intervalMinutes: 1440 });
+  it("accepts legacy field names for a single run but rejects unexpanded recurrence rules", () => {
+    const now = new Date("2026-11-17T00:00:00Z");
+    expect(parseProductionScheduleInput({ scheduleType: "once", plannedAt: "2026-11-17T01:00:00Z", plannedEndAt: "2026-11-17T02:00:00Z", timezone: "UTC" }, now)).toMatchObject({ startAt: "2026-11-17T01:00:00.000Z", endAt: "2026-11-17T02:00:00.000Z", timezone: "UTC" });
+    for (const scheduleType of ["daily", "weekly", "custom"]) {
+      expect(() => parseProductionScheduleInput({ scheduleType, startAt: "2026-11-17T01:00:00Z", endAt: "2026-11-17T02:00:00Z" }, now)).toThrow("重复规则尚未实现");
+    }
+    expect(() => parseProductionScheduleInput({ scheduleType: "once", startAt: "2026-11-17T01:00:00Z", endAt: "2026-11-17T02:00:00Z", intervalMinutes: 1440 }, now)).toThrow("重复规则尚未实现");
+    expect(() => parseProductionScheduleInput({ scheduleType: "once", startAt: "2026-11-17T01:00:00Z", endAt: "2026-11-17T02:00:00Z", occurrenceLimit: 3 }, now)).toThrow("重复规则尚未实现");
+    expect(() => parseProductionScheduleInput({ scheduleType: "once", startAt: "2026-11-17T01:00:00Z", endAt: "2026-11-17T02:00:00Z", repeatUntil: "2026-11-18T00:00:00Z" }, now)).toThrow("重复规则尚未实现");
+    expect(() => parseScheduleInput({ scheduleType: "daily", plannedAt: "2026-11-17T01:00:00Z" }, now)).toThrow("重复规则尚未实现");
+    expect(() => parseScheduleInput({ scheduleType: "once", plannedAt: "2026-11-17T01:00:00Z", intervalMinutes: 1440 }, now)).toThrow("重复规则尚未实现");
   });
 
   it("does not touch D1 when production dependencies are not configured", async () => {

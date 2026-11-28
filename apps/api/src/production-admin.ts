@@ -35,7 +35,7 @@ export class ProductionAdminRepository {
       if (!anotherActiveOwner) throw new BusinessValidationError("LAST_ACTIVE_OWNER_REQUIRED", "不能暂停工作空间最后一位有效 owner");
     }
 
-    const result = await this.db.prepare(`UPDATE workspace_members SET role = COALESCE(?, role), status = COALESCE(?, status), updated_at = ?
+    const updateMember = this.db.prepare(`UPDATE workspace_members SET role = COALESCE(?, role), status = COALESCE(?, status), updated_at = ?
       WHERE tenant_id = ? AND workspace_id = ? AND user_id = ?
         AND (COALESCE(?, status) <> 'suspended' OR role <> 'owner' OR EXISTS (
           SELECT 1 FROM workspace_members other WHERE other.tenant_id = workspace_members.tenant_id AND other.workspace_id = workspace_members.workspace_id
@@ -43,7 +43,19 @@ export class ProductionAdminRepository {
         AND (COALESCE(?, '') <> 'owner' OR role = 'owner' OR EXISTS (
           SELECT 1 FROM workspace_members actor WHERE actor.tenant_id = workspace_members.tenant_id AND actor.workspace_id = workspace_members.workspace_id
             AND actor.user_id = ? AND actor.role = 'owner' AND actor.status = 'active'))`)
-      .bind(role ?? null, status ?? null, now, scope.tenantId, scope.workspaceId, userId, status ?? null, role ?? null, actorUserId).run();
+      .bind(role ?? null, status ?? null, now, scope.tenantId, scope.workspaceId, userId, status ?? null, role ?? null, actorUserId);
+    let result: { meta?: { changes?: number } };
+    if (status === "suspended") {
+      if (!this.db.batch) throw new Error("D1_BATCH_NOT_SUPPORTED");
+      const revokeSessions = this.db.prepare(`UPDATE user_sessions SET revoked_at = ?, last_seen_at = ?
+        WHERE tenant_id = ? AND user_id = ? AND revoked_at IS NULL
+          AND EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.tenant_id = ? AND wm.workspace_id = ? AND wm.user_id = ? AND wm.status = 'suspended')`)
+        .bind(now, now, scope.tenantId, userId, scope.tenantId, scope.workspaceId, userId);
+      const results = await this.db.batch([updateMember, revokeSessions]);
+      result = results[0] ?? { meta: { changes: 0 } };
+    } else {
+      result = await updateMember.run();
+    }
     if ((result.meta?.changes ?? 0) === 0) {
       if (role === "owner" && current.role !== "owner") {
         const actorOwner = await this.db.prepare("SELECT user_id FROM workspace_members WHERE tenant_id = ? AND workspace_id = ? AND user_id = ? AND role = 'owner' AND status = 'active' LIMIT 1").bind(scope.tenantId, scope.workspaceId, actorUserId).first<{ user_id: string }>();
@@ -59,7 +71,15 @@ export class ProductionAdminRepository {
     const current = await this.db.prepare("SELECT role, status FROM workspace_members WHERE tenant_id = ? AND workspace_id = ? AND user_id = ? LIMIT 1").bind(scope.tenantId, scope.workspaceId, userId).first<{ role: Role; status: string }>();
     if (!current) throw new BusinessValidationError("MEMBER_NOT_FOUND", "成员不存在或不属于当前工作空间");
     if (current.role === "owner") throw new BusinessValidationError("OWNER_MEMBER_PROTECTED", "不能移除工作空间 owner");
-    const result = await this.db.prepare("UPDATE workspace_members SET status = 'suspended', updated_at = ? WHERE tenant_id = ? AND workspace_id = ? AND user_id = ? AND status <> 'suspended' AND role <> 'owner'").bind(now, scope.tenantId, scope.workspaceId, userId).run();
+    if (!this.db.batch) throw new Error("D1_BATCH_NOT_SUPPORTED");
+    const results = await this.db.batch([
+      this.db.prepare("UPDATE workspace_members SET status = 'suspended', updated_at = ? WHERE tenant_id = ? AND workspace_id = ? AND user_id = ? AND status <> 'suspended' AND role <> 'owner'").bind(now, scope.tenantId, scope.workspaceId, userId),
+      this.db.prepare(`UPDATE user_sessions SET revoked_at = ?, last_seen_at = ?
+        WHERE tenant_id = ? AND user_id = ? AND revoked_at IS NULL
+          AND EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.tenant_id = ? AND wm.workspace_id = ? AND wm.user_id = ? AND wm.status = 'suspended')`)
+        .bind(now, now, scope.tenantId, userId, scope.tenantId, scope.workspaceId, userId),
+    ]);
+    const result = results[0] ?? { meta: { changes: 0 } };
     if ((result.meta?.changes ?? 0) > 0) return { removed: true, before: current };
     const latest = await this.db.prepare("SELECT role, status FROM workspace_members WHERE tenant_id = ? AND workspace_id = ? AND user_id = ? LIMIT 1").bind(scope.tenantId, scope.workspaceId, userId).first<{ role: Role; status: string }>();
     if (!latest) throw new BusinessValidationError("MEMBER_NOT_FOUND", "成员不存在或不属于当前工作空间");

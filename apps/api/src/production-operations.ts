@@ -26,6 +26,29 @@ async function all<T>(db: D1Like, query: string, ...values: unknown[]): Promise<
   return statement.all ? (await statement.all<T>()).results : [];
 }
 
+function validateUncertainCheckpoint(raw: string | undefined): string {
+  const invalid = () => new BusinessValidationError("PUBLISH_UNCERTAIN_CHECKPOINT_UNSAFE", "任务的已发送进度缺失、损坏或无法映射到素材；为避免重复发布，不能自动恢复，请人工核对并修复检查点");
+  if (typeof raw !== "string" || raw.length === 0) throw invalid();
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { throw invalid(); }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return raw;
+    throw invalid();
+  }
+  const progress = value && typeof value === "object" ? value as Record<string, unknown> : null;
+  if (progress?.version !== 1 || !Array.isArray(progress.messages)) throw invalid();
+  const messageIds = new Set<number>();
+  const contentKeys = new Set<string>();
+  for (const item of progress.messages) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw invalid();
+    const message = item as Record<string, unknown>;
+    if (!Number.isSafeInteger(message.messageId) || Number(message.messageId) <= 0 || typeof message.contentKey !== "string" || message.contentKey.length === 0 || message.contentKey.trim() !== message.contentKey || messageIds.has(Number(message.messageId)) || contentKeys.has(message.contentKey)) throw invalid();
+    messageIds.add(Number(message.messageId));
+    contentKeys.add(message.contentKey);
+  }
+  return raw;
+}
+
 export class ProductionOperationsRepository {
   constructor(private readonly db: D1Like) {}
 
@@ -47,7 +70,7 @@ export class ProductionOperationsRepository {
     if (task.status === "uncertain" && !confirmUncertain) throw new BusinessValidationError("PUBLISH_UNCERTAIN_CONFIRMATION_REQUIRED", "Telegram 发送结果不确定，重试可能重复发布；请先人工核对频道并明确确认");
     let progressJson = task.telegram_message_ids_json ?? "[]";
     if (task.status === "uncertain" && confirmUncertain) {
-      try { if (Array.isArray(JSON.parse(progressJson))) progressJson = "[]"; } catch { progressJson = "[]"; }
+      progressJson = validateUncertainCheckpoint(task.telegram_message_ids_json);
     }
     const updated = await this.db.prepare("UPDATE publish_tasks SET status = 'queued', available_at = ?, locked_at = NULL, completed_at = NULL, telegram_message_ids_json = ?, last_error_code = NULL, last_error_message = NULL, updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status = ? AND attempts = ?").bind(now, progressJson, now, taskId, scope.tenantId, scope.workspaceId, task.status, task.attempts).run();
     if ((updated.meta?.changes ?? 0) === 0) throw new BusinessValidationError("PUBLISH_TASK_STATE_CHANGED", "任务状态已变化，请刷新后重新核对");

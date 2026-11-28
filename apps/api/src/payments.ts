@@ -2,10 +2,17 @@ import type { D1Like } from "@tg-ad-manager/telegram";
 import { BusinessValidationError, canTransitionOrder, type OrderStatus } from "./business.js";
 
 const allowedPaymentMethods = ["wechat", "alipay", "crypto"] as const;
+const allowedRefundMethods = ["wechat", "alipay", "crypto"] as const;
 
 export function assertPaymentMethod(value: string): void {
   if (!allowedPaymentMethods.includes(value as (typeof allowedPaymentMethods)[number])) {
     throw new BusinessValidationError("INVALID_PAYMENT_METHOD", "支付方式仅支持微信、支付宝或数字货币");
+  }
+}
+
+export function assertRefundMethod(value: string): void {
+  if (!allowedRefundMethods.includes(value as (typeof allowedRefundMethods)[number])) {
+    throw new BusinessValidationError("INVALID_REFUND_METHOD", "退款申请方式仅支持微信、支付宝或数字货币；未选择时可留空");
   }
 }
 
@@ -77,11 +84,13 @@ export function parsePaymentReviewInput(value: unknown): PaymentReviewInput {
 
 export function parseRefundInput(value: unknown): RefundInput {
   const input = object(value);
+  const method = stringField(input?.method, "refund_method", 50);
+  if (method) assertRefundMethod(method);
   return {
     amountMinor: amount(input?.amountMinor, "amountMinor"),
     reason: stringField(input?.reason, "refund_reason", 2000, true)!,
     ...(input?.idempotencyKey !== undefined ? { idempotencyKey: stringField(input.idempotencyKey, "idempotency_key", 120, true)! } : {}),
-    method: stringField(input?.method, "refund_method", 50),
+    ...(method ? { method } : {}),
     transactionRef: stringField(input?.transactionRef, "transaction_ref", 255),
   };
 }
@@ -184,6 +193,7 @@ export class D1PaymentRepository {
   }
 
   async createRefund(scope: { tenantId: string; workspaceId: string }, actorUserId: string, orderId: string, input: RefundInput, now: string): Promise<string> {
+    if (input.method) assertRefundMethod(input.method);
     const order = await this.order(scope, orderId);
     if (!["paid", "approved", "scheduled", "published", "completed"].includes(order.status) && !["paid", "partially_refunded"].includes(order.payment_status)) throw new BusinessValidationError("ORDER_REFUND_NOT_OPEN", "当前订单尚未达到可申请退款状态");
     const available = order.receivable_minor - await this.approvedRefunds(orderId);
@@ -199,16 +209,7 @@ export class D1PaymentRepository {
     if (!refund) throw new BusinessValidationError("REFUND_NOT_FOUND", "退款记录不存在或不属于当前工作空间");
     if (refund.status !== "pending_review") throw new BusinessValidationError("REFUND_ALREADY_REVIEWED", "退款记录已经审核，不能重复处理");
     await this.db.prepare("UPDATE ad_order_refunds SET status = ?, reviewed_by = ?, reviewed_at = ?, review_note = ? WHERE id = ? AND status = 'pending_review'").bind(input.status, reviewerUserId, now, input.note ?? null, refundId).run();
-    let orderPaymentStatus = refund.payment_status;
-    let orderStatus = refund.order_status;
-    if (input.status === "approved") {
-      const refunded = await this.approvedRefunds(refund.order_id);
-      orderPaymentStatus = refunded >= refund.receivable_minor ? "refunded" : "partially_refunded";
-      const target = orderPaymentStatus as OrderStatus;
-      if (canTransitionOrder(refund.order_status, target)) orderStatus = target;
-    }
-    await this.db.prepare("UPDATE ad_orders SET payment_status = ?, status = ?, updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ?").bind(orderPaymentStatus, orderStatus, now, refund.order_id, scope.tenantId, scope.workspaceId).run();
-    await this.db.prepare("INSERT INTO ad_order_revisions (id, order_id, actor_user_id, reason, before_json, after_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(crypto.randomUUID(), refund.order_id, reviewerUserId, input.status === "approved" ? "refund_approved" : "refund_rejected", JSON.stringify({ paymentStatus: refund.payment_status, orderStatus: refund.order_status }), JSON.stringify({ paymentStatus: orderPaymentStatus, orderStatus }), now).run();
-    return { orderId: refund.order_id, orderPaymentStatus, orderStatus };
+    await this.db.prepare("INSERT INTO ad_order_revisions (id, order_id, actor_user_id, reason, before_json, after_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(crypto.randomUUID(), refund.order_id, reviewerUserId, input.status === "approved" ? "refund_approved_pending_disbursement" : "refund_rejected", JSON.stringify({ paymentStatus: refund.payment_status, orderStatus: refund.order_status }), JSON.stringify({ paymentStatus: refund.payment_status, orderStatus: refund.order_status, refundStatus: input.status }), now).run();
+    return { orderId: refund.order_id, orderPaymentStatus: refund.payment_status, orderStatus: refund.order_status };
   }
 }

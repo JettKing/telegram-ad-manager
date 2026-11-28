@@ -32,9 +32,25 @@ describe("production operations", () => {
   it("requires explicit confirmation before retrying an uncertain Telegram send", async () => {
     const scope = { tenantId: "tenant-1", workspaceId: "workspace-1" };
     await expect(new ProductionOperationsRepository(mockDb("uncertain").db).retryTask(scope, "task-1", "user-1", "2026-11-27T00:00:00.000Z")).rejects.toMatchObject({ code: "PUBLISH_UNCERTAIN_CONFIRMATION_REQUIRED" });
-    const { db, queries, runs } = mockDb("uncertain", "[72]");
+    const checkpoint = JSON.stringify({ version: 1, messages: [{ messageId: 72, contentKey: "asset-1" }] });
+    const { db, queries, runs } = mockDb("uncertain", checkpoint);
     await new ProductionOperationsRepository(db).retryTask(scope, "task-1", "user-1", "2026-11-27T00:00:00.000Z", true);
     expect(queries.join("\n")).toContain("AND status = ?");
+    expect(runs[1][1]).toBe(checkpoint);
+  });
+
+  it("refuses to retry uncertain tasks when the checkpoint is missing, corrupted, or unmappable", async () => {
+    const scope = { tenantId: "tenant-1", workspaceId: "workspace-1" };
+    for (const checkpoint of [undefined, "{broken", "[72]", JSON.stringify({ version: 2, messages: [] }), JSON.stringify({ version: 1, messages: [{ messageId: 72, contentKey: "asset-1" }, { messageId: 73, contentKey: "asset-1" }] })]) {
+      const { db, queries } = mockDb("uncertain", checkpoint);
+      await expect(new ProductionOperationsRepository(db).retryTask(scope, "task-1", "user-1", "2026-11-27T00:00:00.000Z", true)).rejects.toMatchObject({ code: "PUBLISH_UNCERTAIN_CHECKPOINT_UNSAFE" });
+      expect(queries).toHaveLength(1);
+    }
+  });
+
+  it("preserves an explicit empty checkpoint when manual confirmation permits recovery", async () => {
+    const { db, runs } = mockDb("uncertain", "[]");
+    await new ProductionOperationsRepository(db).retryTask({ tenantId: "tenant-1", workspaceId: "workspace-1" }, "task-1", "user-1", "2026-11-27T00:00:00.000Z", true);
     expect(runs[1][1]).toBe("[]");
   });
 

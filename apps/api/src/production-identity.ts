@@ -1,7 +1,8 @@
 import type { TelegramUser, D1Like } from "@tg-ad-manager/telegram";
 import type { IdentityContext, ProvisionedIdentity, Role } from "./identity.js";
+import { BusinessValidationError } from "./errors.js";
 
-interface UserRow { id: string; telegram_user_id: string; display_name: string }
+interface UserRow { id: string; telegram_user_id: string; display_name: string; is_active: number }
 interface MembershipRow { tenant_id: string; tenant_name: string; tenant_slug: string; role: Role }
 interface WorkspaceRow { id: string; name: string }
 
@@ -19,20 +20,28 @@ function safeEqual(left: string, right: string): boolean { if (left.length !== r
 export async function provisionProductionTelegramIdentity(db: D1Like, user: TelegramUser, now = new Date().toISOString()): Promise<ProvisionedIdentity> {
   const displayName = displayNameFor(user);
   await db.prepare(`INSERT INTO users (id, telegram_user_id, telegram_username, display_name, is_active, created_at, updated_at)
-    VALUES (?, ?, ?, ?, 1, ?, ?) ON CONFLICT (telegram_user_id) DO UPDATE SET telegram_username = excluded.telegram_username, display_name = excluded.display_name, is_active = 1, updated_at = excluded.updated_at`).bind(crypto.randomUUID(), String(user.id), user.username ?? null, displayName, now, now).run();
-  const storedUser = await db.prepare("SELECT id, telegram_user_id, display_name FROM users WHERE telegram_user_id = ? AND is_active = 1").bind(String(user.id)).first<UserRow>();
+    VALUES (?, ?, ?, ?, 1, ?, ?) ON CONFLICT (telegram_user_id) DO UPDATE SET telegram_username = excluded.telegram_username, display_name = excluded.display_name, updated_at = excluded.updated_at WHERE users.is_active = 1`).bind(crypto.randomUUID(), String(user.id), user.username ?? null, displayName, now, now).run();
+  const storedUser = await db.prepare("SELECT id, telegram_user_id, display_name, is_active FROM users WHERE telegram_user_id = ? LIMIT 1").bind(String(user.id)).first<UserRow>();
   if (!storedUser) throw new Error("USER_UPSERT_FAILED");
+  if (storedUser.is_active !== 1) throw new BusinessValidationError("USER_SUSPENDED", "此 Telegram 账号已停权，请联系工作空间管理员");
   let membership = await db.prepare(`SELECT tm.tenant_id, t.name AS tenant_name, t.slug AS tenant_slug, tm.role FROM tenant_members tm JOIN tenants t ON t.id = tm.tenant_id WHERE tm.user_id = ? AND tm.status = 'active' AND t.status = 'active' ORDER BY tm.created_at LIMIT 1`).bind(storedUser.id).first<MembershipRow>();
+  let workspace: WorkspaceRow | null = null;
   if (!membership) {
+    const previousMembership = await db.prepare("SELECT tenant_id FROM tenant_members WHERE user_id = ? LIMIT 1").bind(storedUser.id).first<{ tenant_id: string }>();
+    if (previousMembership) throw new BusinessValidationError("NO_ACTIVE_TENANT_MEMBERSHIP", "此账号没有可用的工作空间成员资格，请联系管理员恢复访问");
     const tenantId = crypto.randomUUID(); const workspaceId = crypto.randomUUID(); const tenantName = `${displayName} Workspace`; const nowSlug = `tenant-${slugPart(String(user.id))}-${tenantId.slice(0, 8)}`;
-    await db.prepare("INSERT INTO tenants (id, name, slug, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?)").bind(tenantId, tenantName, nowSlug, now, now).run();
-    await db.prepare("INSERT INTO workspaces (id, tenant_id, name, slug, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?)").bind(workspaceId, tenantId, "默认工作空间", `default-${workspaceId.slice(0, 8)}`, now, now).run();
-    await db.prepare("INSERT INTO tenant_members (tenant_id, user_id, role, status, created_at, updated_at) VALUES (?, ?, 'owner', 'active', ?, ?)").bind(tenantId, storedUser.id, now, now).run();
-    await db.prepare("INSERT INTO workspace_members (workspace_id, tenant_id, user_id, role, status, created_at, updated_at) VALUES (?, ?, ?, 'owner', 'active', ?, ?)").bind(workspaceId, tenantId, storedUser.id, now, now).run();
+    if (!db.batch) throw new Error("D1_BATCH_NOT_SUPPORTED");
+    await db.batch([
+      db.prepare("INSERT INTO tenants (id, name, slug, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?)").bind(tenantId, tenantName, nowSlug, now, now),
+      db.prepare("INSERT INTO workspaces (id, tenant_id, name, slug, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?)").bind(workspaceId, tenantId, "默认工作空间", `default-${workspaceId.slice(0, 8)}`, now, now),
+      db.prepare("INSERT INTO tenant_members (tenant_id, user_id, role, status, created_at, updated_at) VALUES (?, ?, 'owner', 'active', ?, ?)").bind(tenantId, storedUser.id, now, now),
+      db.prepare("INSERT INTO workspace_members (workspace_id, tenant_id, user_id, role, status, created_at, updated_at) VALUES (?, ?, ?, 'owner', 'active', ?, ?)").bind(workspaceId, tenantId, storedUser.id, now, now),
+    ]);
     membership = { tenant_id: tenantId, tenant_name: tenantName, tenant_slug: nowSlug, role: "owner" };
+    workspace = { id: workspaceId, name: "默认工作空间" };
   }
-  let workspace = await db.prepare(`SELECT w.id, w.name FROM workspaces w JOIN workspace_members wm ON wm.workspace_id = w.id AND wm.tenant_id = w.tenant_id WHERE w.tenant_id = ? AND w.status = 'active' AND wm.user_id = ? AND wm.status = 'active' ORDER BY w.created_at LIMIT 1`).bind(membership.tenant_id, storedUser.id).first<WorkspaceRow>();
-  if (!workspace) { const id = crypto.randomUUID(); await db.prepare("INSERT INTO workspaces (id, tenant_id, name, slug, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?)").bind(id, membership.tenant_id, "默认工作空间", `default-${id.slice(0, 8)}`, now, now).run(); await db.prepare("INSERT INTO workspace_members (workspace_id, tenant_id, user_id, role, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?)").bind(id, membership.tenant_id, storedUser.id, membership.role, now, now).run(); workspace = { id, name: "默认工作空间" }; }
+  if (!workspace) workspace = await db.prepare(`SELECT w.id, w.name FROM workspaces w JOIN workspace_members wm ON wm.workspace_id = w.id AND wm.tenant_id = w.tenant_id WHERE w.tenant_id = ? AND w.status = 'active' AND wm.user_id = ? AND wm.status = 'active' ORDER BY w.created_at LIMIT 1`).bind(membership.tenant_id, storedUser.id).first<WorkspaceRow>();
+  if (!workspace) throw new BusinessValidationError("NO_ACTIVE_WORKSPACE", "此账号没有可用的工作空间成员资格，请联系管理员恢复访问");
   return { userId: storedUser.id, telegramUserId: storedUser.telegram_user_id, displayName: storedUser.display_name, tenantId: membership.tenant_id, tenantName: membership.tenant_name, workspaceId: workspace.id, workspaceName: workspace.name, role: membership.role };
 }
 

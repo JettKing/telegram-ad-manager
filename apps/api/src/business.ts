@@ -238,6 +238,7 @@ export class D1BusinessRepository {
   async transitionOrder(scope: { tenantId: string; workspaceId: string }, actorUserId: string, orderId: string, to: OrderStatus, reason: string, now: string): Promise<boolean> {
     const order = await this.getOrder(scope, orderId);
     if (!order) throw new BusinessValidationError("ORDER_NOT_FOUND", "订单不存在或不属于当前工作空间");
+    if (["paid", "refunded", "partially_refunded"].includes(to)) throw new BusinessValidationError("FINANCIAL_TRANSITION_REQUIRES_PAYMENT_WORKFLOW", "财务订单状态只能通过付款审核或实际退款出款流程更新");
     if (!canTransitionOrder(order.status, to)) throw new BusinessValidationError("INVALID_ORDER_TRANSITION", `订单不能从 ${order.status} 变更为 ${to}`);
     const result = await this.db.prepare("UPDATE ad_orders SET status = ?, updated_at = ? WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status = ?").bind(to, now, orderId, scope.tenantId, scope.workspaceId, order.status).run();
     if ((result.meta?.changes ?? 0) === 0) return false;

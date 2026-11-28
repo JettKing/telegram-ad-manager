@@ -107,6 +107,7 @@ export function parseProductionScheduleInput(value: unknown, now = new Date()): 
   const input = object(value);
   const scheduleType = input?.scheduleType;
   if (scheduleType !== "once" && scheduleType !== "daily" && scheduleType !== "weekly" && scheduleType !== "custom") throw new BusinessValidationError("INVALID_SCHEDULE_TYPE", "排期类型必须是 once、daily、weekly 或 custom");
+  if (scheduleType !== "once") throw new BusinessValidationError("UNSUPPORTED_REPEAT_SCHEDULE", "当前生产发布队列只支持单次排期；重复规则尚未实现实例展开");
   const startAt = text(input?.startAt ?? input?.plannedAt, "startAt");
   const endAt = text(input?.endAt ?? input?.plannedEndAt, "endAt");
   const startTime = Date.parse(startAt);
@@ -118,6 +119,7 @@ export function parseProductionScheduleInput(value: unknown, now = new Date()): 
   if (!Number.isInteger(intervalMinutes) || intervalMinutes < 0) throw new BusinessValidationError("INVALID_INTERVAL_MINUTES", "intervalMinutes 必须是非负整数");
   const occurrenceLimit = input?.occurrenceLimit === undefined ? undefined : Number(input.occurrenceLimit);
   if (occurrenceLimit !== undefined && (!Number.isInteger(occurrenceLimit) || occurrenceLimit <= 0)) throw new BusinessValidationError("INVALID_OCCURRENCE_LIMIT", "occurrenceLimit 必须是正整数");
+  if (input?.repeatUntil !== undefined || occurrenceLimit !== undefined || intervalMinutes > 0) throw new BusinessValidationError("UNSUPPORTED_REPEAT_SCHEDULE", "当前生产发布队列只支持单次排期；重复规则尚未实现实例展开");
   const repeatUntil = input?.repeatUntil === undefined ? undefined : text(input.repeatUntil, "repeatUntil");
   if (repeatUntil && (!Number.isFinite(Date.parse(repeatUntil)) || Date.parse(repeatUntil) < endTime)) throw new BusinessValidationError("INVALID_REPEAT_UNTIL", "repeatUntil 必须晚于 endAt");
   return { scheduleType, startAt: new Date(startTime).toISOString(), endAt: new Date(endTime).toISOString(), timezone, repeatUntil: repeatUntil ? new Date(Date.parse(repeatUntil)).toISOString() : undefined, intervalMinutes, occurrenceLimit };
@@ -147,6 +149,7 @@ export class ProductionPublishRepository {
   }
 
   async createSchedule(scope: { tenantId: string; workspaceId: string }, orderId: string, input: ProductionScheduleInput, now: string): Promise<{ scheduleId: string; taskId: string; idempotencyKey: string }> {
+    if (input.scheduleType !== "once" || input.repeatUntil !== undefined || input.occurrenceLimit !== undefined || (input.intervalMinutes ?? 0) !== 0) throw new BusinessValidationError("UNSUPPORTED_REPEAT_SCHEDULE", "当前生产发布队列只支持单次排期；重复规则尚未实现实例展开");
     const order = await this.getOrder(scope, orderId);
     if (order.status !== "approved") throw new BusinessValidationError("ORDER_NOT_APPROVED", "只有 approved 订单可以进入生产排期");
     const channel = await this.db.prepare(`SELECT c.id FROM telegram_channels c JOIN telegram_channel_permissions p ON p.channel_id = c.id AND p.tenant_id = c.tenant_id

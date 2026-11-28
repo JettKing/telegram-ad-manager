@@ -25,6 +25,7 @@ import { ProductionAdminRepository, writeProductionAudit } from "./production-ad
 export interface R2BucketLike {
   put(key: string, value: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string, options?: { httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string> }): Promise<unknown>;
   get?(key: string): Promise<{ body?: ReadableStream; httpMetadata?: { contentType?: string }; httpEtag?: string } | null>;
+  delete?(key: string): Promise<unknown>;
 }
 
 export interface ApiBindings {
@@ -202,7 +203,12 @@ app.get("/health/ready", async (context) => {
     } catch { blocking.push("database"); }
   }
   if (!env.TELEGRAM_BOT_TOKEN) blocking.push("telegram");
-  if (!env.R2_BUCKET) blocking.push("r2");
+  if (!env.SESSION_SECRET) blocking.push("session_secret");
+  if (!env.WEB_APP_ORIGIN) blocking.push("web_app_origin");
+  if (!env.TELEGRAM_WEBHOOK_SECRET) blocking.push("telegram_webhook_secret");
+  if (!env.TELEGRAM_BOT_IDENTITY_ID) blocking.push("telegram_bot_identity");
+  if (!productionContract(env)) blocking.push("database_schema");
+  if (!env.R2_BUCKET?.put || !env.R2_BUCKET?.get || !env.R2_BUCKET?.delete) blocking.push("r2");
   const ready = blocking.length === 0;
   return context.json({ ...health, ok: ready, ready, blocking }, ready ? 200 : 503);
 });
@@ -236,6 +242,7 @@ app.post("/api/v1/auth/telegram", async (context) => {
     const session = await issueSession(env.DB, identity, env.SESSION_SECRET, sessionTtlSeconds(env.SESSION_TTL_SECONDS), env);
     return context.json(success({ authenticated: true, user: { id: identity.userId, telegramUserId: identity.telegramUserId, displayName: identity.displayName }, tenant: { id: identity.tenantId, name: identity.tenantName }, workspace: { id: identity.workspaceId, name: identity.workspaceName }, role: identity.role, session: { token: session.token, expiresAt: session.expiresAt }, authDate: validation.authDate }, requestId(context)));
   } catch (error) {
+    if (error instanceof BusinessValidationError) return businessError(context, error, requestId(context));
     console.error("telegram_identity_provision_error", { requestId: requestId(context), message: error instanceof Error ? error.message : "unknown" });
     return context.json(failure("IDENTITY_PROVISION_FAILED", "生产数据库初始化失败，请稍后重试", requestId(context)), 503);
   }
@@ -374,7 +381,7 @@ app.get("/api/v1/orders/:orderId/timeline", requireAuth("order:read"), async (co
 
 app.get("/api/v1/payments/proofs/:proofId", requireAuth("finance:read"), async (context) => {
   const env = runtimeEnv(context.env); const auth = context.get("auth"); const proofId = context.req.param("proofId");
-  if (!env.DB || !auth || !env.R2_BUCKET?.get) return context.json(failure("PAYMENT_PROOF_NOT_CONFIGURED", "付款凭证下载存储尚未配置", requestId(context)), 503);
+  if (!env.DB || !auth || !productionContract(env) || !env.R2_BUCKET?.get) return context.json(failure("PAYMENT_PROOF_NOT_CONFIGURED", "生产付款凭证下载存储尚未配置", requestId(context)), 503);
   try {
     const proof = await env.DB.prepare("SELECT object_key, file_name, mime_type, status FROM payment_proof_uploads WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status = 'ready' LIMIT 1").bind(proofId, auth.tenantId, auth.workspaceId).first<{ object_key: string; file_name: string; mime_type: string; status: string }>();
     if (!proof) return context.json(failure("PAYMENT_PROOF_NOT_FOUND", "付款凭证不存在或不属于当前工作空间", requestId(context)), 404);
@@ -387,7 +394,7 @@ app.get("/api/v1/payments/proofs/:proofId", requireAuth("finance:read"), async (
 
 app.post("/api/v1/payments/proofs/upload", requireAuth("order:write"), async (context) => {
   const env = runtimeEnv(context.env); const auth = context.get("auth");
-  if (!env.DB || !auth || !env.R2_BUCKET) return context.json(failure("PAYMENT_PROOF_NOT_CONFIGURED", "付款凭证上传存储尚未配置", requestId(context)), 503);
+  if (!env.DB || !auth || !productionContract(env) || !env.R2_BUCKET?.delete) return context.json(failure("PAYMENT_PROOF_NOT_CONFIGURED", "生产付款凭证上传存储尚未完整配置", requestId(context)), 503);
   try {
     const form = await context.req.raw.formData(); const candidate = form.get("file");
     if (!(candidate instanceof File)) throw new BusinessValidationError("PAYMENT_PROOF_FILE_REQUIRED", "请选择付款凭证文件");
@@ -395,8 +402,20 @@ app.post("/api/v1/payments/proofs/upload", requireAuth("order:write"), async (co
     if (!allowed.has(candidate.type)) throw new BusinessValidationError("PAYMENT_PROOF_TYPE_NOT_ALLOWED", "付款凭证仅支持 JPG、PNG、WebP 或 PDF");
     if (candidate.size <= 0 || candidate.size > 10 * 1024 * 1024) throw new BusinessValidationError("PAYMENT_PROOF_SIZE_INVALID", "付款凭证大小必须在 1B 到 10MB 之间");
     const id = crypto.randomUUID(); const original = candidate.name.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120) || "proof"; const objectKey = `${auth.tenantId}/${auth.workspaceId}/${id}-${original}`; const now = new Date().toISOString();
-    await env.R2_BUCKET.put(objectKey, candidate.stream(), { httpMetadata: { contentType: candidate.type }, customMetadata: { tenantId: auth.tenantId, workspaceId: auth.workspaceId, uploadedBy: auth.userId, purpose: "payment_proof" } });
-    await env.DB.prepare("INSERT INTO payment_proof_uploads (id, tenant_id, workspace_id, object_key, file_name, mime_type, file_size, status, uploaded_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?)").bind(id, auth.tenantId, auth.workspaceId, objectKey, original, candidate.type, candidate.size, auth.userId, now).run();
+    await env.DB.prepare("INSERT INTO payment_proof_uploads (id, tenant_id, workspace_id, object_key, file_name, mime_type, file_size, status, uploaded_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'deleted', ?, ?)").bind(id, auth.tenantId, auth.workspaceId, objectKey, original, candidate.type, candidate.size, auth.userId, now).run();
+    let putAttempted = false;
+    try {
+      putAttempted = true;
+      await env.R2_BUCKET.put(objectKey, candidate.stream(), { httpMetadata: { contentType: candidate.type }, customMetadata: { tenantId: auth.tenantId, workspaceId: auth.workspaceId, uploadedBy: auth.userId, purpose: "payment_proof" } });
+      const activated = await env.DB.prepare("UPDATE payment_proof_uploads SET status = 'ready' WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND status = 'deleted'").bind(id, auth.tenantId, auth.workspaceId).run();
+      if ((activated.meta?.changes ?? 0) !== 1) throw new Error("PAYMENT_PROOF_METADATA_ACTIVATION_FAILED");
+    } catch (error) {
+      if (putAttempted) {
+        try { await env.R2_BUCKET.delete(objectKey); }
+        catch (cleanupError) { console.error("payment_proof_orphan_cleanup_failed", { proofId: id, objectKey, message: cleanupError instanceof Error ? cleanupError.message : "unknown" }); }
+      }
+      throw error;
+    }
     return context.json(success({ proofAssetId: id, fileName: original, mimeType: candidate.type, fileSize: candidate.size, status: "ready" }, requestId(context)), 201);
   } catch (error) { return businessError(context, error, requestId(context)); }
 });
@@ -404,7 +423,7 @@ app.post("/api/v1/payments/proofs/upload", requireAuth("order:write"), async (co
 app.post("/api/v1/orders/:orderId/payments", requireAuth("order:write"), async (context) => {
   const env = runtimeEnv(context.env);
   const auth = context.get("auth");
-  if (!env.DB || !auth) return context.json(failure("PAYMENT_NOT_CONFIGURED", "付款数据库上下文尚未配置", requestId(context)), 503);
+  if (!env.DB || !auth || !productionContract(env)) return context.json(failure("PAYMENT_NOT_CONFIGURED", "生产付款数据库上下文尚未配置", requestId(context)), 503);
   try {
     const now = new Date().toISOString(); const paymentId = await paymentRepository(env.DB, env).createPayment({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("orderId"), parsePaymentInput(await context.req.json()), now); if (productionContract(env)) await enqueueCustomerNotification(env.DB, { tenantId: auth.tenantId, workspaceId: auth.workspaceId, orderId: context.req.param("orderId"), event: "payment_submitted", objectId: paymentId, now });
     return context.json(success({ paymentId, status: "pending_review" }, requestId(context)), 201);
@@ -414,7 +433,7 @@ app.post("/api/v1/orders/:orderId/payments", requireAuth("order:write"), async (
 app.post("/api/v1/finance/payments/:paymentId/review", requireAuth("finance:write"), async (context) => {
   const env = runtimeEnv(context.env);
   const auth = context.get("auth");
-  if (!env.DB || !auth) return context.json(failure("FINANCE_NOT_CONFIGURED", "财务数据库上下文尚未配置", requestId(context)), 503);
+  if (!env.DB || !auth || !productionContract(env)) return context.json(failure("FINANCE_NOT_CONFIGURED", "生产财务审核数据库上下文尚未配置", requestId(context)), 503);
   try {
     const reviewInput = parsePaymentReviewInput(await context.req.json()); const result = await paymentRepository(env.DB, env).reviewPayment({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("paymentId"), reviewInput, new Date().toISOString()); if (productionContract(env) && result.orderId) await enqueueCustomerNotification(env.DB, { tenantId: auth.tenantId, workspaceId: auth.workspaceId, orderId: result.orderId, event: reviewInput.status === "approved" ? "payment_approved" : "payment_rejected", objectId: context.req.param("paymentId"), details: reviewInput.status === "rejected" ? reviewInput.note : undefined });
     return context.json(success(result, requestId(context)));
@@ -434,7 +453,7 @@ app.get("/api/v1/orders/:orderId/refunds", requireAuth("order:read"), async (con
 app.post("/api/v1/orders/:orderId/refunds", requireAuth("order:write"), async (context) => {
   const env = runtimeEnv(context.env);
   const auth = context.get("auth");
-  if (!env.DB || !auth) return context.json(failure("REFUND_NOT_CONFIGURED", "退款数据库上下文尚未配置", requestId(context)), 503);
+  if (!env.DB || !auth || !productionContract(env)) return context.json(failure("REFUND_NOT_CONFIGURED", "生产退款数据库上下文尚未配置", requestId(context)), 503);
   try {
     const refundId = await paymentRepository(env.DB, env).createRefund({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("orderId"), parseRefundInput(await context.req.json()), new Date().toISOString());
     return context.json(success({ refundId, status: "pending_review" }, requestId(context)), 201);
@@ -444,7 +463,7 @@ app.post("/api/v1/orders/:orderId/refunds", requireAuth("order:write"), async (c
 app.post("/api/v1/finance/refunds/:refundId/review", requireAuth("finance:write"), async (context) => {
   const env = runtimeEnv(context.env);
   const auth = context.get("auth");
-  if (!env.DB || !auth) return context.json(failure("FINANCE_NOT_CONFIGURED", "财务数据库上下文尚未配置", requestId(context)), 503);
+  if (!env.DB || !auth || !productionContract(env)) return context.json(failure("FINANCE_NOT_CONFIGURED", "生产退款审核数据库上下文尚未配置", requestId(context)), 503);
   try {
     const result = await paymentRepository(env.DB, env).reviewRefund({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("refundId"), parseRefundReviewInput(await context.req.json()), new Date().toISOString());
     return context.json(success(result, requestId(context)));
@@ -456,7 +475,7 @@ app.post("/api/v1/finance/refunds/:refundId/disburse", requireAuth("finance:writ
   if (!env.DB || !auth || !productionContract(env)) return context.json(failure("FINANCE_NOT_CONFIGURED", "生产退款出款登记尚未配置", requestId(context)), 503);
   try {
     const body = await context.req.json<Record<string, unknown>>();
-    const method = typeof body.method === "string" ? body.method : "bank_transfer";
+    const method = typeof body.method === "string" ? body.method : "";
     const transactionRef = typeof body.transactionRef === "string" ? body.transactionRef.trim() : undefined;
     const actualAmountMinor = body.actualAmountMinor === undefined ? NaN : Number.isSafeInteger(body.actualAmountMinor) ? Number(body.actualAmountMinor) : NaN;
     const result = await new ProductionPaymentRepository(env.DB).disburseRefund({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("refundId"), { method, transactionRef, actualAmountMinor }, new Date().toISOString());
@@ -545,7 +564,7 @@ app.post("/api/v1/orders/:orderId/submit", requireAuth("order:write"), async (co
 app.post("/api/v1/orders/:orderId/transition", requireAuth("order:write"), async (context) => {
   const env = runtimeEnv(context.env); const auth = context.get("auth");
   if (!env.DB || !auth) return context.json(failure("ORDER_NOT_CONFIGURED", "订单数据库上下文尚未配置", requestId(context)), 503);
-  try { const body = await context.req.json() as Record<string, unknown>; const to = body.to; if (typeof to !== "string" || !["pending_payment", "paid", "pending_review", "approved", "scheduled", "publishing", "published", "completed", "cancelled", "refunded", "partially_refunded", "failed"].includes(to)) throw new BusinessValidationError("INVALID_ORDER_STATUS", "订单目标状态不合法"); const permission = requiredTransitionPermission(to as OrderStatus); if (permission && !hasPermission(auth.role, permission)) return context.json(failure("ORDER_TRANSITION_FORBIDDEN", `订单状态 ${to} 只能由具备 ${permission} 权限的角色推进`, requestId(context)), 403); const updated = await businessRepository(env.DB, env).transitionOrder({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("orderId"), to as OrderStatus, typeof body.reason === "string" ? body.reason : "status_changed", new Date().toISOString()); return context.json(success({ updated, status: to }, requestId(context))); }
+  try { const body = await context.req.json() as Record<string, unknown>; const to = body.to; if (typeof to !== "string" || !["pending_payment", "paid", "pending_review", "approved", "scheduled", "publishing", "published", "completed", "cancelled", "refunded", "partially_refunded", "failed"].includes(to)) throw new BusinessValidationError("INVALID_ORDER_STATUS", "订单目标状态不合法"); if (["paid", "refunded", "partially_refunded"].includes(to)) throw new BusinessValidationError("FINANCIAL_TRANSITION_REQUIRES_PAYMENT_WORKFLOW", "财务订单状态只能通过付款审核或实际退款出款流程更新"); const permission = requiredTransitionPermission(to as OrderStatus); if (permission && !hasPermission(auth.role, permission)) return context.json(failure("ORDER_TRANSITION_FORBIDDEN", `订单状态 ${to} 只能由具备 ${permission} 权限的角色推进`, requestId(context)), 403); const updated = await businessRepository(env.DB, env).transitionOrder({ tenantId: auth.tenantId, workspaceId: auth.workspaceId }, auth.userId, context.req.param("orderId"), to as OrderStatus, typeof body.reason === "string" ? body.reason : "status_changed", new Date().toISOString()); return context.json(success({ updated, status: to }, requestId(context))); }
   catch (error) { return businessError(context, error, requestId(context)); }
 });
 
@@ -678,7 +697,7 @@ app.post("/api/v1/media-groups/:groupId/confirm", requireAuth("media:write"), as
 });
 
 app.post("/webhooks/telegram", async (context) => {
-  const env = runtimeEnv(context.env); const expectedSecret = env.TELEGRAM_WEBHOOK_SECRET; if (!expectedSecret) return context.json(failure("WEBHOOK_NOT_CONFIGURED", "Telegram Webhook Secret 尚未配置", requestId(context)), 503); if (!validateWebhookSecret(context.req.header("X-Telegram-Bot-Api-Secret-Token"), expectedSecret)) return context.json(failure("WEBHOOK_UNAUTHORIZED", "Webhook Secret 校验失败", requestId(context)), 401);
+  const env = runtimeEnv(context.env); const expectedSecret = env.TELEGRAM_WEBHOOK_SECRET; if (!expectedSecret) return context.json(failure("WEBHOOK_NOT_CONFIGURED", "Telegram Webhook Secret 尚未配置", requestId(context)), 503); if (!validateWebhookSecret(context.req.header("X-Telegram-Bot-Api-Secret-Token"), expectedSecret)) return context.json(failure("WEBHOOK_UNAUTHORIZED", "Webhook Secret 校验失败", requestId(context)), 401); const persistentStoreRequired = env.ENVIRONMENT?.toLowerCase() === "production" || productionContract(env); if (persistentStoreRequired && (!env.DB || !env.TELEGRAM_BOT_IDENTITY_ID || !productionContract(env))) return context.json(failure("WEBHOOK_PERSISTENCE_NOT_CONFIGURED", "生产 Webhook 持久化存储或 schema contract 尚未配置", requestId(context)), 503);
   let body: unknown; try { body = await context.req.json(); } catch { return context.json(failure("INVALID_JSON", "Webhook 请求体必须是有效 JSON", requestId(context)), 400); }
   const update = parseTelegramUpdate(body); if (!update) return context.json(failure("INVALID_UPDATE", "Webhook 请求缺少有效 update_id", requestId(context)), 400);
   try {

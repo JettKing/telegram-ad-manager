@@ -29,8 +29,17 @@ describe("payment proof validation", () => {
 
 describe("refund ledger validation", () => {
   it("requires a positive amount and a reason", () => {
-    expect(parseRefundInput({ amountMinor: 5000, reason: "campaign cancelled", method: "bank_transfer" })).toMatchObject({ amountMinor: 5000, reason: "campaign cancelled", method: "bank_transfer" });
+    expect(parseRefundInput({ amountMinor: 5000, reason: "campaign cancelled" })).toMatchObject({ amountMinor: 5000, reason: "campaign cancelled" });
     expect(() => parseRefundInput({ amountMinor: 5000 })).toThrow("refund_reason 不能为空");
+  });
+
+  it("rejects the removed methods for new refund requests", () => {
+    for (const method of ["cash", "bank_transfer", "other"]) {
+      expect(() => parseRefundInput({ amountMinor: 100, reason: "test", method })).toThrow("退款申请方式仅支持微信、支付宝或数字货币");
+    }
+    for (const method of ["wechat", "alipay", "crypto"]) {
+      expect(parseRefundInput({ amountMinor: 100, reason: "test", method }).method).toBe(method);
+    }
   });
 
   it("only accepts explicit finance review decisions", () => {
