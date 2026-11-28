@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { app, parseStartCommand } from "../apps/api/src/app";
 import { D1ReplayStore, MemoryWebhookUpdateStore, validateTelegramInitData, validateWebhookSecret } from "@tg-ad-manager/telegram";
 
@@ -85,6 +85,41 @@ describe("Telegram Webhook", () => {
     expect(parseStartCommand({ message: { chat: { id: 6092237879, type: "private" }, text: "/start@TGAdOpsBot" } })).toEqual({ chatId: "6092237879" });
     expect(parseStartCommand({ message: { chat: { id: -100123, type: "supergroup" }, text: "/start" } })).toBeNull();
     expect(parseStartCommand({ message: { chat: { id: 6092237879, type: "private" }, text: "hello /start" } })).toBeNull();
+  });
+
+  it("binds native fetch and retries /start when the Telegram welcome send fails", async () => {
+    const originalFetch = globalThis.fetch;
+    let attempts = 0;
+    const fetchStub = function (this: unknown): Promise<Response> {
+      expect(this).toBe(globalThis);
+      attempts += 1;
+      const response = attempts === 1
+        ? { ok: false, error_code: 429, description: "Too Many Requests" }
+        : { ok: true, result: { message_id: 701 } };
+      return Promise.resolve(new Response(JSON.stringify(response), { status: attempts === 1 ? 429 : 200 }));
+    } as typeof fetch;
+    globalThis.fetch = fetchStub;
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const payload = JSON.stringify({ update_id: 9800001, message: { text: "/start", chat: { id: 123456789, type: "private" } } });
+    const env = { TELEGRAM_WEBHOOK_SECRET: "expected", TELEGRAM_BOT_TOKEN: "test-token" } as never;
+    const request = () => app.request("/webhooks/telegram", { method: "POST", headers: { "content-type": "application/json", "X-Telegram-Bot-Api-Secret-Token": "expected" }, body: payload }, env);
+
+    try {
+      const failedAttempt = await request();
+      const retriedAttempt = await request();
+      const duplicateAfterSuccess = await request();
+
+      expect(failedAttempt.status).toBe(503);
+      expect((await failedAttempt.json()).error.code).toBe("TELEGRAM_START_REPLY_FAILED");
+      expect(retriedAttempt.status).toBe(200);
+      expect((await retriedAttempt.json()).data.welcomeSent).toBe(true);
+      expect(duplicateAfterSuccess.status).toBe(200);
+      expect((await duplicateAfterSuccess.json()).data.duplicate).toBe(true);
+      expect(attempts).toBe(2);
+    } finally {
+      globalThis.fetch = originalFetch;
+      errorSpy.mockRestore();
+    }
   });
 
   it("uses constant-time secret matching semantics", () => {

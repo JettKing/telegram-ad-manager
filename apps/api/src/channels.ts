@@ -50,7 +50,7 @@ export class TelegramBotApiClient implements TelegramBotApi {
 
   private async call<T>(method: string, payload: Record<string, unknown> = {}): Promise<T> {
     if (!this.token.trim()) throw new TelegramApiError(method, undefined, "TELEGRAM_BOT_TOKEN_NOT_CONFIGURED");
-    const response = await this.fetchImpl(`${this.baseUrl}/bot${this.token}/${method}`, {
+    const response = await this.fetchImpl.call(globalThis, `${this.baseUrl}/bot${this.token}/${method}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),

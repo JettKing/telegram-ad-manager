@@ -709,9 +709,19 @@ app.post("/webhooks/telegram", async (context) => {
     try {
       if (result.accepted && env.DB && env.TELEGRAM_BOT_IDENTITY_ID) media = await mediaRepository(env.DB, env).ingest(env.TELEGRAM_BOT_IDENTITY_ID, body);
       const start = result.accepted ? parseStartCommand(body) : null;
-      if (start && env.TELEGRAM_BOT_TOKEN) {
-        try { await new TelegramBotApiClient(env.TELEGRAM_BOT_TOKEN, fetch, env.TELEGRAM_API_BASE_URL ?? "https://api.telegram.org").sendMessage(start.chatId, START_WELCOME_MESSAGE, { reply_markup: START_WELCOME_MARKUP }); welcomeSent = true; }
-        catch (error) { console.error("telegram_start_welcome_failed", { updateId: update.update_id, message: error instanceof Error ? error.message : "unknown" }); }
+      if (start) {
+        if (!env.TELEGRAM_BOT_TOKEN) {
+          if (result.accepted) await store.release(update.update_id);
+          return context.json(failure("TELEGRAM_BOT_NOT_CONFIGURED", "Bot 欢迎消息依赖尚未配置", requestId(context)), 503);
+        }
+        try {
+          await new TelegramBotApiClient(env.TELEGRAM_BOT_TOKEN, fetch, env.TELEGRAM_API_BASE_URL ?? "https://api.telegram.org").sendMessage(start.chatId, START_WELCOME_MESSAGE, { reply_markup: START_WELCOME_MARKUP });
+          welcomeSent = true;
+        } catch (error) {
+          console.error("telegram_start_welcome_failed", { updateId: update.update_id, message: error instanceof Error ? error.message : "unknown" });
+          if (result.accepted) await store.release(update.update_id);
+          return context.json(failure("TELEGRAM_START_REPLY_FAILED", "Bot 欢迎消息暂时发送失败，请 Telegram 稍后重试", requestId(context)), 503);
+        }
       }
       if (result.accepted) await store.complete(update.update_id, new Date().toISOString());
     } catch (error) {
